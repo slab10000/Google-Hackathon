@@ -14,6 +14,8 @@ interface TimelineProps {
   onSelectClip: (id: string | null) => void;
 }
 
+type TimelineTool = "select" | "cut" | "trim";
+
 function formatTime(seconds: number) {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
@@ -34,6 +36,39 @@ function renderWaveform(waveform: number[]) {
   ));
 }
 
+function renderToolIcon(tool: TimelineTool | "delete") {
+  switch (tool) {
+    case "select":
+      return (
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M5 3.5v15.7c0 .6.7.9 1.2.5l3.7-3 2.4 4.5c.2.4.7.6 1.1.4l1.7-.9c.4-.2.6-.7.4-1.1l-2.4-4.5 4.8-.6c.7-.1.9-.9.3-1.3L5.8 3A.7.7 0 0 0 5 3.5Z" />
+        </svg>
+      );
+    case "cut":
+      return (
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <circle cx="6.5" cy="6.5" r="2.75" />
+          <circle cx="6.5" cy="17.5" r="2.75" />
+          <path strokeLinecap="round" d="M9 8.5 19 3.5M9 15.5l10 5M9 12h4" />
+        </svg>
+      );
+    case "trim":
+      return (
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path strokeLinecap="round" d="M7 4v16M17 4v16" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="m10 8-3 4 3 4M14 8l3 4-3 4" />
+        </svg>
+      );
+    case "delete":
+      return (
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path strokeLinecap="round" d="M4 7h16M9.5 11.5v5M14.5 11.5v5M9 4h6l1 2H8l1-2Z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6.5 7 7.2 19a1 1 0 0 0 1 .9h7.6a1 1 0 0 0 1-.9L17.5 7" />
+        </svg>
+      );
+  }
+}
+
 export default function Timeline({
   clips,
   libraryClips,
@@ -49,6 +84,7 @@ export default function Timeline({
   const [zoom, setZoom] = useState(1);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const [activeTool, setActiveTool] = useState<TimelineTool>("select");
   const [dragState, setDragState] = useState<{
     type: "move" | "trim-start" | "trim-end";
     clipId: string;
@@ -110,11 +146,11 @@ export default function Timeline({
     [scrubToPosition]
   );
 
-  const handleMouseMove = useCallback(
-    (event: React.MouseEvent) => {
+  const handleDragMove = useCallback(
+    (clientX: number) => {
       if (!dragState) return;
 
-      const deltaX = event.clientX - dragState.startX;
+      const deltaX = clientX - dragState.startX;
       const deltaTime = (deltaX / timelineWidth) * totalDuration;
       const original = dragState.originalClip;
 
@@ -142,10 +178,6 @@ export default function Timeline({
     [clips.length, dispatch, dragState, libraryClips, timelineWidth, totalDuration]
   );
 
-  const handleMouseUp = useCallback(() => {
-    setDragState(null);
-  }, []);
-
   useEffect(() => {
     if (!isScrubbing) return;
 
@@ -166,6 +198,26 @@ export default function Timeline({
     };
   }, [isScrubbing, scrubToPosition]);
 
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      handleDragMove(event.clientX);
+    };
+
+    const handleWindowMouseUp = () => {
+      setDragState(null);
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+  }, [dragState, handleDragMove]);
+
   const handleSplit = useCallback(() => {
     if (!selectedClipId) return;
 
@@ -185,7 +237,38 @@ export default function Timeline({
     onSelectClip(null);
   }, [dispatch, onSelectClip, selectedClipId]);
 
+  const handleCutClip = useCallback(
+    (clipId: string, clientX: number) => {
+      const clip = clipsWithOffsets.find((item) => item.id === clipId);
+      if (!clip || clip.type !== "video") return;
+
+      const element = containerRef.current?.querySelector<HTMLElement>(`[data-clip-id="${clipId}"]`);
+      if (!element) return;
+
+      const rect = element.getBoundingClientRect();
+      const localRatio = clamp((clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+      const splitTime = clip.sourceStartTime + clip.duration * localRatio;
+
+      if (splitTime <= clip.sourceStartTime + 0.05 || splitTime >= clip.sourceEndTime - 0.05) return;
+
+      dispatch({ type: "SPLIT_CLIP", clipId, splitTime });
+      onSelectClip(clipId);
+    },
+    [clipsWithOffsets, dispatch, onSelectClip]
+  );
+
   const playheadX = totalDuration > 0 ? (currentTime / totalDuration) * timelineWidth : 0;
+
+  const toolButtons: Array<{
+    id: TimelineTool | "delete";
+    title: string;
+    disabled?: boolean;
+  }> = [
+    { id: "select", title: "Select and move clips" },
+    { id: "cut", title: "Cut clips where you click" },
+    { id: "trim", title: "Trim by dragging clip edges" },
+    { id: "delete", title: "Remove selected clip", disabled: !selectedClipId },
+  ];
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/8 bg-[#111215]">
@@ -201,14 +284,7 @@ export default function Timeline({
             disabled={!selectedClipId}
             className="rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-medium text-white/82 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-35"
           >
-            Split
-          </button>
-          <button
-            onClick={handleDelete}
-            disabled={!selectedClipId}
-            className="rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-[11px] font-medium text-red-200 transition hover:bg-red-500/16 disabled:cursor-not-allowed disabled:opacity-35"
-          >
-            Delete
+            Split At Playhead
           </button>
           <div className="ml-2 flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-2 py-1.5">
             <button
@@ -229,6 +305,44 @@ export default function Timeline({
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div className="w-12 shrink-0 border-r border-white/8 bg-[#0d0f12]">
+          <div className="flex h-12 items-center justify-center border-b border-white/8">
+            <span className="text-[9px] font-medium uppercase tracking-[0.24em] text-white/22">Tools</span>
+          </div>
+          <div className="flex flex-col items-center gap-2 px-2 py-3">
+            {toolButtons.map((tool) => {
+              const isActive = tool.id === activeTool;
+              const isDelete = tool.id === "delete";
+
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  title={tool.title}
+                  disabled={tool.disabled}
+                  onClick={() => {
+                    if (tool.id === "delete") {
+                      handleDelete();
+                      return;
+                    }
+
+                    setActiveTool(tool.id);
+                  }}
+                  className={`flex h-9 w-9 items-center justify-center rounded-lg border text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+                    isDelete
+                      ? "border-red-400/20 bg-red-500/10 text-red-200 hover:bg-red-500/16"
+                      : isActive
+                      ? "border-sky-400/35 bg-sky-400/14 text-sky-100"
+                      : "border-white/10 bg-white/[0.04] text-white/58 hover:bg-white/[0.08] hover:text-white/85"
+                  } disabled:cursor-not-allowed disabled:opacity-35`}
+                >
+                  {renderToolIcon(tool.id)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="w-16 shrink-0 border-r border-white/8 bg-[#0f1013]">
           <div className="h-12 border-b border-white/8" />
           <div className="flex h-[92px] items-center justify-center border-b border-white/8 text-xs font-medium uppercase tracking-[0.18em] text-white/42">
@@ -249,9 +363,6 @@ export default function Timeline({
             if ((event.target as HTMLElement).closest("[data-clip]")) return;
             startScrubbing(event.clientX);
           }}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
           onDragOver={(event) => {
             event.preventDefault();
             setIsDropTarget(true);
@@ -290,6 +401,7 @@ export default function Timeline({
                   <div
                     key={clip.id}
                     data-clip
+                    data-clip-id={clip.id}
                     className={`absolute inset-y-3 overflow-hidden rounded-xl border transition ${
                       isSelected
                         ? "border-sky-400/55 bg-sky-400/20 shadow-[0_0_0_1px_rgba(56,189,248,0.15)]"
@@ -299,7 +411,9 @@ export default function Timeline({
                   >
                     {clip.type === "video" && (
                       <div
-                        className="absolute inset-y-0 left-0 w-2 cursor-col-resize bg-black/10 hover:bg-white/18"
+                        className={`absolute inset-y-0 left-0 z-10 flex w-4 cursor-col-resize items-center justify-center transition ${
+                          activeTool === "trim" ? "bg-sky-300/12" : "bg-black/10 hover:bg-white/18"
+                        }`}
                         onMouseDown={(event) => {
                           event.stopPropagation();
                           onSelectClip(clip.id);
@@ -311,7 +425,9 @@ export default function Timeline({
                             clipIndex: index,
                           });
                         }}
-                      />
+                      >
+                        <span className="h-7 w-0.5 rounded-full bg-white/45" />
+                      </div>
                     )}
 
                     <button
@@ -320,6 +436,7 @@ export default function Timeline({
                       onMouseDown={(event) => {
                         event.stopPropagation();
                         onSelectClip(clip.id);
+                        if (activeTool !== "select") return;
                         setDragState({
                           type: "move",
                           clipId: clip.id,
@@ -331,6 +448,9 @@ export default function Timeline({
                       onClick={(event) => {
                         event.stopPropagation();
                         onSelectClip(clip.id);
+                        if (activeTool === "cut") {
+                          handleCutClip(clip.id, event.clientX);
+                        }
                       }}
                     >
                       <div className="min-w-0">
@@ -348,7 +468,9 @@ export default function Timeline({
 
                     {clip.type === "video" && (
                       <div
-                        className="absolute inset-y-0 right-0 w-2 cursor-col-resize bg-black/10 hover:bg-white/18"
+                        className={`absolute inset-y-0 right-0 z-10 flex w-4 cursor-col-resize items-center justify-center transition ${
+                          activeTool === "trim" ? "bg-sky-300/12" : "bg-black/10 hover:bg-white/18"
+                        }`}
                         onMouseDown={(event) => {
                           event.stopPropagation();
                           onSelectClip(clip.id);
@@ -360,7 +482,9 @@ export default function Timeline({
                             clipIndex: index,
                           });
                         }}
-                      />
+                      >
+                        <span className="h-7 w-0.5 rounded-full bg-white/45" />
+                      </div>
                     )}
                   </div>
                 );
