@@ -40,13 +40,13 @@ export default function MediaBin({ clips, selectedClipId, onSelectClip, onAddFil
   );
 
   return (
-    <aside className="flex h-full flex-col border-r border-white/8 bg-[#141518]">
-      <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
-        <div>
+    <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-white/8 bg-[#141518]">
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
+        <div className="min-w-0 flex-1">
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/35">Project</p>
           <h2 className="mt-1 text-sm font-medium text-white/90">Media Bin</h2>
         </div>
-        <label className="inline-flex cursor-pointer items-center rounded-md border border-white/10 bg-white/6 px-2.5 py-1.5 text-[11px] font-medium text-white/80 transition hover:bg-white/10">
+        <label className="inline-flex shrink-0 cursor-pointer items-center rounded-md border border-white/10 bg-white/6 px-2.5 py-1.5 text-[11px] font-medium text-white/80 transition hover:bg-white/10">
           Import
           <input
             type="file"

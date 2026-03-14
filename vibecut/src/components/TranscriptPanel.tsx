@@ -54,14 +54,14 @@ export default function TranscriptPanel({
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <div className="border-b border-white/8 px-4 py-3">
         <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Transcript</p>
         <p className="mt-1 truncate text-sm text-white/82">{clipName || "Select a clip"}</p>
       </div>
 
       <div className="border-b border-white/8 px-4 py-3">
-        <div className="flex gap-2">
+        <div className="flex min-w-0 gap-2">
           <input
             type="text"
             placeholder="Search clips by meaning..."

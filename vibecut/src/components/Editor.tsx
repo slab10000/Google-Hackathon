@@ -816,7 +816,7 @@ export default function Editor() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#0b0c0f] text-white">
+    <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-[#0b0c0f] text-white">
       <header className="flex items-center justify-between border-b border-white/8 bg-[#111215] px-5 py-3">
         <div className="flex items-center gap-4">
           <div>
@@ -845,7 +845,7 @@ export default function Editor() {
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_340px]">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[260px_minmax(0,1fr)_320px] overflow-hidden 2xl:grid-cols-[280px_minmax(0,1fr)_340px]">
         <MediaBin
           clips={libraryClips}
           selectedClipId={selectedSourceClipId}
@@ -853,9 +853,9 @@ export default function Editor() {
           onAddFiles={handleAddFiles}
         />
 
-        <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_320px] bg-[#0d0e12]">
-          <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] p-4">
-            <div className="mb-3 flex items-center justify-between">
+        <main className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_320px] overflow-hidden bg-[#0d0e12]">
+          <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-4">
+            <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
               <div className="inline-flex rounded-xl border border-white/8 bg-[#131419] p-1">
                 {(["source", "program"] as MonitorMode[]).map((mode) => (
                   <button
@@ -877,7 +877,7 @@ export default function Editor() {
                 ))}
               </div>
 
-              <div className="text-xs uppercase tracking-[0.2em] text-white/28">
+              <div className="hidden shrink-0 text-xs uppercase tracking-[0.2em] text-white/28 lg:block">
                 {monitorMode === "source" ? "Media preview" : "Sequence preview"}
               </div>
             </div>
@@ -897,7 +897,7 @@ export default function Editor() {
             />
           </section>
 
-          <section className="min-h-0 p-4 pt-0">
+          <section className="min-h-0 min-w-0 overflow-hidden p-4 pt-0">
             <Timeline
               clips={timeline.clips}
               libraryClips={libraryClips}
@@ -912,7 +912,7 @@ export default function Editor() {
           </section>
         </main>
 
-        <aside className="flex min-h-0 flex-col border-l border-white/8 bg-[#141518]">
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-white/8 bg-[#141518]">
           <div className="border-b border-white/8 px-4 py-3">
             <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Dock</p>
             <div className="mt-3 grid grid-cols-3 rounded-xl border border-white/8 bg-white/[0.03] p-1">
@@ -937,16 +937,16 @@ export default function Editor() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1">
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
             {dockTab === "ai" && (
-              <div className="flex h-full flex-col">
+              <div className="flex h-full min-h-0 min-w-0 flex-col">
                 <div className="border-b border-white/8 px-4 py-3">
                   <p className="text-sm font-medium text-white/84">Edit by intent</p>
                   <p className="mt-1 text-xs leading-5 text-white/38">
                     Run natural-language edits against the current sequence.
                   </p>
                 </div>
-                <div className="space-y-4 overflow-y-auto p-4">
+                <div className="min-h-0 min-w-0 space-y-4 overflow-y-auto overflow-x-hidden p-4">
                   <CommandInput
                     onSubmit={handleEditCommand}
                     isProcessing={isEditProcessing}
@@ -974,7 +974,7 @@ export default function Editor() {
             )}
 
             {dockTab === "inspector" && (
-              <div className="h-full overflow-y-auto p-4">
+              <div className="h-full min-w-0 overflow-y-auto overflow-x-hidden p-4">
                 <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Selection</p>
                   {selectedTimelineClip ? (

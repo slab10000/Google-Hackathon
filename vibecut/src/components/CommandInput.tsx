@@ -18,8 +18,8 @@ export default function CommandInput({ onSubmit, isProcessing, lastExplanation }
   };
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex gap-2">
+    <div className="flex min-w-0 flex-col gap-2">
+      <div className="flex min-w-0 flex-wrap gap-2">
         <input
           type="text"
           placeholder='Try: "make this snappier", "remove the introduction", "cut filler words"...'
@@ -27,12 +27,12 @@ export default function CommandInput({ onSubmit, isProcessing, lastExplanation }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
           disabled={isProcessing}
-          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/25 focus:outline-none focus:border-violet-500/50 disabled:opacity-50"
+          className="min-w-0 flex-1 basis-48 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder-white/25 focus:border-violet-500/50 focus:outline-none disabled:opacity-50"
         />
         <button
           onClick={handleSubmit}
           disabled={isProcessing || !value.trim()}
-          className="px-5 py-3 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2"
+          className="flex shrink-0 items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isProcessing ? (
             <>

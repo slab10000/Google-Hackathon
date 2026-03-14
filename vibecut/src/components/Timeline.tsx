@@ -152,14 +152,14 @@ export default function Timeline({
   const playheadX = totalDuration > 0 ? (currentTime / totalDuration) * timelineWidth : 0;
 
   return (
-    <div className="flex h-full flex-col rounded-2xl border border-white/8 bg-[#111215]">
-      <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
-        <div>
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/8 bg-[#111215]">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
+        <div className="min-w-0 flex-1">
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Sequence</p>
           <p className="mt-1 text-sm text-white/80">Build the cut by dragging clips from the media bin.</p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             onClick={handleSplit}
             disabled={!selectedClipId}
@@ -192,7 +192,7 @@ export default function Timeline({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className="w-16 shrink-0 border-r border-white/8 bg-[#0f1013]">
           <div className="h-12 border-b border-white/8" />
           <div className="flex h-[92px] items-center justify-center border-b border-white/8 text-xs font-medium uppercase tracking-[0.18em] text-white/42">
@@ -205,7 +205,7 @@ export default function Timeline({
 
         <div
           ref={containerRef}
-          className={`relative min-h-0 flex-1 overflow-auto ${
+          className={`relative min-h-0 min-w-0 flex-1 overflow-auto ${
             isDropTarget ? "bg-sky-400/[0.03]" : "bg-[#15171b]"
           }`}
           onClick={(event) => {
