@@ -1,67 +1,82 @@
-import { TimelineClip, TimelineState, TimelineAction, TranscriptSegment } from "@/types";
+import { TimelineClip, TimelineState, TimelineAction } from "@/types";
 import { v4 as uuid } from "uuid";
 
 function computeTotalDuration(clips: TimelineClip[]): number {
   return clips.reduce((sum, clip) => sum + clip.duration, 0);
 }
 
+function buildVideoClip(
+  sourceClipId: string,
+  sourceStartTime: number,
+  sourceEndTime: number,
+  label?: string
+): TimelineClip {
+  return {
+    id: uuid(),
+    type: "video",
+    sourceClipId,
+    sourceStartTime,
+    sourceEndTime,
+    duration: Math.max(0, sourceEndTime - sourceStartTime),
+    label,
+  };
+}
+
 export function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
   switch (action.type) {
-    case "SET_ORIGINAL": {
-      const clip: TimelineClip = {
-        id: uuid(),
-        type: "video",
-        startTime: 0,
-        endTime: action.duration,
-        duration: action.duration,
-      };
-      return {
-        clips: [clip],
-        totalDuration: action.duration,
-        originalVideoUrl: action.url,
-        originalDuration: action.duration,
-      };
+    case "ADD_SOURCE_CLIP": {
+      const newClip = buildVideoClip(action.sourceClipId, 0, action.duration, action.label);
+      const clips = [...state.clips, newClip];
+      return { ...state, clips, totalDuration: computeTotalDuration(clips) };
     }
 
     case "REMOVE_SEGMENTS": {
-      const removeRanges = action.segments
-        .map((s) => ({ start: s.startTime, end: s.endTime }))
-        .sort((a, b) => a.start - b.start);
+      const removeBySource = new Map<string, { start: number; end: number }[]>();
+      for (const segment of action.segments) {
+        const ranges = removeBySource.get(segment.sourceClipId) || [];
+        ranges.push({ start: segment.startTime, end: segment.endTime });
+        removeBySource.set(segment.sourceClipId, ranges);
+      }
+
+      const normalizedRanges = new Map<string, { start: number; end: number }[]>();
+      for (const [sourceClipId, ranges] of removeBySource.entries()) {
+        normalizedRanges.set(
+          sourceClipId,
+          ranges.sort((a, b) => a.start - b.start)
+        );
+      }
 
       const newClips: TimelineClip[] = [];
       for (const clip of state.clips) {
-        if (clip.type === "image") {
+        if (clip.type !== "video" || !clip.sourceClipId) {
           newClips.push(clip);
           continue;
         }
-        let currentStart = clip.startTime;
-        for (const range of removeRanges) {
-          if (range.end <= clip.startTime || range.start >= clip.endTime) continue;
-          const cutStart = Math.max(range.start, clip.startTime);
-          const cutEnd = Math.min(range.end, clip.endTime);
-          if (cutStart > currentStart) {
-            newClips.push({
-              id: uuid(),
-              type: "video",
-              startTime: currentStart,
-              endTime: cutStart,
-              duration: cutStart - currentStart,
-              transcriptText: clip.transcriptText,
-            });
-          }
-          currentStart = cutEnd;
+
+        const removeRanges = normalizedRanges.get(clip.sourceClipId);
+        if (!removeRanges || removeRanges.length === 0) {
+          newClips.push(clip);
+          continue;
         }
-        if (currentStart < clip.endTime) {
-          newClips.push({
-            id: uuid(),
-            type: "video",
-            startTime: currentStart,
-            endTime: clip.endTime,
-            duration: clip.endTime - currentStart,
-            transcriptText: clip.transcriptText,
-          });
+
+        let currentStart = clip.sourceStartTime;
+        for (const range of removeRanges) {
+          if (range.end <= clip.sourceStartTime || range.start >= clip.sourceEndTime) continue;
+          const cutStart = Math.max(range.start, clip.sourceStartTime);
+          const cutEnd = Math.min(range.end, clip.sourceEndTime);
+
+          if (cutStart > currentStart) {
+            newClips.push(buildVideoClip(clip.sourceClipId, currentStart, cutStart, clip.label));
+          }
+
+          currentStart = Math.max(currentStart, cutEnd);
+        }
+
+        if (currentStart < clip.sourceEndTime) {
+          newClips.push(buildVideoClip(clip.sourceClipId, currentStart, clip.sourceEndTime, clip.label));
         }
       }
+
       return { ...state, clips: newClips, totalDuration: computeTotalDuration(newClips) };
     }
 
@@ -69,11 +84,13 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
       const newClip: TimelineClip = {
         id: uuid(),
         type: "image",
-        startTime: 0,
-        endTime: action.duration,
+        sourceStartTime: 0,
+        sourceEndTime: action.duration,
         duration: action.duration,
         imageSrc: action.imageSrc,
+        label: action.label,
       };
+
       const clips = [...state.clips];
       if (action.afterClipId) {
         const idx = clips.findIndex((c) => c.id === action.afterClipId);
@@ -81,6 +98,7 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
       } else {
         clips.unshift(newClip);
       }
+
       return { ...state, clips, totalDuration: computeTotalDuration(clips) };
     }
 
@@ -88,57 +106,50 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
       const clips = [...state.clips];
       const idx = clips.findIndex((c) => c.id === action.clipId);
       if (idx === -1) return state;
+
       const clip = clips[idx];
-      if (clip.type !== "video") return state;
-      if (action.splitTime <= clip.startTime || action.splitTime >= clip.endTime) return state;
-      const left: TimelineClip = {
-        id: uuid(),
-        type: "video",
-        startTime: clip.startTime,
-        endTime: action.splitTime,
-        duration: action.splitTime - clip.startTime,
-        transcriptText: clip.transcriptText,
-      };
-      const right: TimelineClip = {
-        id: uuid(),
-        type: "video",
-        startTime: action.splitTime,
-        endTime: clip.endTime,
-        duration: clip.endTime - action.splitTime,
-        transcriptText: clip.transcriptText,
-      };
+      if (clip.type !== "video" || !clip.sourceClipId) return state;
+      if (action.splitTime <= clip.sourceStartTime || action.splitTime >= clip.sourceEndTime) return state;
+
+      const left = buildVideoClip(clip.sourceClipId, clip.sourceStartTime, action.splitTime, clip.label);
+      const right = buildVideoClip(clip.sourceClipId, action.splitTime, clip.sourceEndTime, clip.label);
       clips.splice(idx, 1, left, right);
+
       return { ...state, clips, totalDuration: computeTotalDuration(clips) };
     }
 
     case "TRIM_CLIP": {
-      const clips = state.clips.map((c) => {
-        if (c.id !== action.clipId) return c;
-        const newDuration = action.newEnd - action.newStart;
-        return { ...c, startTime: action.newStart, endTime: action.newEnd, duration: newDuration };
+      const clips = state.clips.map((clip) => {
+        if (clip.id !== action.clipId || clip.type !== "video") return clip;
+        return {
+          ...clip,
+          sourceStartTime: action.newStart,
+          sourceEndTime: action.newEnd,
+          duration: Math.max(0, action.newEnd - action.newStart),
+        };
       });
+
       return { ...state, clips, totalDuration: computeTotalDuration(clips) };
     }
 
     case "DELETE_CLIP": {
-      const clips = state.clips.filter((c) => c.id !== action.clipId);
+      const clips = state.clips.filter((clip) => clip.id !== action.clipId);
       return { ...state, clips, totalDuration: computeTotalDuration(clips) };
     }
 
     case "REORDER_CLIP": {
       const clips = [...state.clips];
       const [moved] = clips.splice(action.fromIndex, 1);
+      if (!moved) return state;
       clips.splice(action.toIndex, 0, moved);
-      return { ...state, clips };
+      return { ...state, clips, totalDuration: computeTotalDuration(clips) };
     }
 
-    case "APPLY_EDIT": {
+    case "APPLY_EDIT":
       return { ...state, clips: action.clips, totalDuration: computeTotalDuration(action.clips) };
-    }
 
-    case "SET_CLIPS": {
+    case "SET_CLIPS":
       return { ...state, clips: action.clips, totalDuration: computeTotalDuration(action.clips) };
-    }
 
     default:
       return state;
@@ -148,6 +159,4 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
 export const initialTimelineState: TimelineState = {
   clips: [],
   totalDuration: 0,
-  originalVideoUrl: "",
-  originalDuration: 0,
 };

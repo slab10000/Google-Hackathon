@@ -1,36 +1,53 @@
 "use client";
-import { useState, useRef, useCallback, useMemo } from "react";
-import { TimelineClip, TimelineAction } from "@/types";
+import { useMemo, useRef, useState, useCallback } from "react";
+import { LibraryClip, TimelineAction, TimelineClip } from "@/types";
 
 interface TimelineProps {
   clips: TimelineClip[];
+  libraryClips: LibraryClip[];
   totalDuration: number;
   currentTime: number;
-  playheadPosition: number;
   onSeek: (time: number) => void;
+  onAppendFromLibrary: (sourceClipId: string) => void;
   dispatch: React.Dispatch<TimelineAction>;
   selectedClipId: string | null;
   onSelectClip: (id: string | null) => void;
 }
 
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
+function formatTime(seconds: number) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function renderWaveform(waveform: number[]) {
+  return waveform.map((sample, index) => (
+    <span
+      key={`${index}-${sample}`}
+      className="flex-1 rounded-full bg-sky-300/75"
+      style={{ height: `${Math.max(14, sample * 100)}%` }}
+    />
+  ));
 }
 
 export default function Timeline({
   clips,
+  libraryClips,
   totalDuration,
   currentTime,
-  playheadPosition,
   onSeek,
+  onAppendFromLibrary,
   dispatch,
   selectedClipId,
   onSelectClip,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
+  const [isDropTarget, setIsDropTarget] = useState(false);
   const [dragState, setDragState] = useState<{
     type: "move" | "trim-start" | "trim-end";
     clipId: string;
@@ -39,69 +56,74 @@ export default function Timeline({
     clipIndex: number;
   } | null>(null);
 
-  const timelineWidth = useMemo(() => Math.max(totalDuration * 80 * zoom, 600), [totalDuration, zoom]);
+  const clipsWithOffsets = useMemo(() => {
+    return clips.reduce<
+      Array<
+        TimelineClip & {
+          source?: LibraryClip;
+          sequenceStart: number;
+          sequenceEnd: number;
+        }
+      >
+    >((accumulator, clip) => {
+      const previousEnd = accumulator[accumulator.length - 1]?.sequenceEnd || 0;
+      const sequenceEnd = previousEnd + clip.duration;
+      const source = clip.sourceClipId ? libraryClips.find((item) => item.id === clip.sourceClipId) : undefined;
+
+      accumulator.push({
+        ...clip,
+        source,
+        sequenceStart: previousEnd,
+        sequenceEnd,
+      });
+
+      return accumulator;
+    }, []);
+  }, [clips, libraryClips]);
+
+  const timelineWidth = useMemo(() => Math.max(totalDuration * 88 * zoom, 840), [totalDuration, zoom]);
 
   const getTimeFromX = useCallback(
-    (clientX: number): number => {
+    (clientX: number) => {
       const container = containerRef.current;
       if (!container) return 0;
       const rect = container.getBoundingClientRect();
       const x = clientX - rect.left + container.scrollLeft;
-      return Math.max(0, (x / timelineWidth) * totalDuration);
+      return clamp((x / timelineWidth) * totalDuration, 0, totalDuration);
     },
     [timelineWidth, totalDuration]
   );
 
-  const handleTimelineClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (dragState) return;
-      if ((e.target as HTMLElement).closest("[data-clip]")) return;
-      const time = getTimeFromX(e.clientX);
-      onSeek(time);
-    },
-    [getTimeFromX, onSeek, dragState]
-  );
-
-  const handleClipMouseDown = useCallback(
-    (e: React.MouseEvent, clip: TimelineClip, type: "move" | "trim-start" | "trim-end", index: number) => {
-      e.stopPropagation();
-      onSelectClip(clip.id);
-      setDragState({
-        type,
-        clipId: clip.id,
-        startX: e.clientX,
-        originalClip: { ...clip },
-        clipIndex: index,
-      });
-    },
-    [onSelectClip]
-  );
-
   const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+    (event: React.MouseEvent) => {
       if (!dragState) return;
-      const dx = e.clientX - dragState.startX;
-      const dt = (dx / timelineWidth) * totalDuration;
-      const orig = dragState.originalClip;
 
-      if (dragState.type === "trim-start" && orig.type === "video") {
-        const newStart = Math.max(0, Math.min(orig.startTime + dt, orig.endTime - 0.1));
-        dispatch({ type: "TRIM_CLIP", clipId: dragState.clipId, newStart, newEnd: orig.endTime });
-      } else if (dragState.type === "trim-end" && orig.type === "video") {
-        const newEnd = Math.max(orig.startTime + 0.1, orig.endTime + dt);
-        dispatch({ type: "TRIM_CLIP", clipId: dragState.clipId, newStart: orig.startTime, newEnd });
-      } else if (dragState.type === "move") {
-        const newIndex = Math.max(
-          0,
-          Math.min(clips.length - 1, dragState.clipIndex + Math.round(dx / 100))
-        );
-        if (newIndex !== dragState.clipIndex) {
-          dispatch({ type: "REORDER_CLIP", fromIndex: dragState.clipIndex, toIndex: newIndex });
-          setDragState({ ...dragState, clipIndex: newIndex });
-        }
+      const deltaX = event.clientX - dragState.startX;
+      const deltaTime = (deltaX / timelineWidth) * totalDuration;
+      const original = dragState.originalClip;
+
+      if (dragState.type === "trim-start" && original.type === "video") {
+        const newStart = clamp(original.sourceStartTime + deltaTime, 0, original.sourceEndTime - 0.1);
+        dispatch({ type: "TRIM_CLIP", clipId: dragState.clipId, newStart, newEnd: original.sourceEndTime });
+        return;
+      }
+
+      if (dragState.type === "trim-end" && original.type === "video") {
+        const maxEnd = original.sourceClipId
+          ? libraryClips.find((clip) => clip.id === original.sourceClipId)?.duration ?? original.sourceEndTime
+          : original.sourceEndTime;
+        const newEnd = clamp(original.sourceEndTime + deltaTime, original.sourceStartTime + 0.1, maxEnd);
+        dispatch({ type: "TRIM_CLIP", clipId: dragState.clipId, newStart: original.sourceStartTime, newEnd });
+        return;
+      }
+
+      const newIndex = clamp(dragState.clipIndex + Math.round(deltaX / 140), 0, Math.max(clips.length - 1, 0));
+      if (newIndex !== dragState.clipIndex) {
+        dispatch({ type: "REORDER_CLIP", fromIndex: dragState.clipIndex, toIndex: newIndex });
+        setDragState((state) => (state ? { ...state, clipIndex: newIndex } : state));
       }
     },
-    [dragState, timelineWidth, totalDuration, dispatch, clips.length]
+    [clips.length, dispatch, dragState, libraryClips, timelineWidth, totalDuration]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -110,174 +132,247 @@ export default function Timeline({
 
   const handleSplit = useCallback(() => {
     if (!selectedClipId) return;
-    const clip = clips.find((c) => c.id === selectedClipId);
-    if (!clip || clip.type !== "video") return;
-    // Calculate split time based on playhead position relative to clip
-    let accTime = 0;
-    for (const c of clips) {
-      if (c.id === selectedClipId) {
-        const splitTime = clip.startTime + (playheadPosition - accTime);
-        if (splitTime > clip.startTime && splitTime < clip.endTime) {
-          dispatch({ type: "SPLIT_CLIP", clipId: selectedClipId, splitTime });
-        }
-        break;
-      }
-      accTime += c.duration;
-    }
-  }, [selectedClipId, clips, playheadPosition, dispatch]);
+
+    const activeClip = clipsWithOffsets.find((clip) => clip.id === selectedClipId);
+    if (!activeClip || activeClip.type !== "video") return;
+
+    const localOffset = currentTime - activeClip.sequenceStart;
+    const splitTime = activeClip.sourceStartTime + localOffset;
+    if (splitTime <= activeClip.sourceStartTime || splitTime >= activeClip.sourceEndTime) return;
+
+    dispatch({ type: "SPLIT_CLIP", clipId: activeClip.id, splitTime });
+  }, [clipsWithOffsets, currentTime, dispatch, selectedClipId]);
 
   const handleDelete = useCallback(() => {
-    if (selectedClipId) {
-      dispatch({ type: "DELETE_CLIP", clipId: selectedClipId });
-      onSelectClip(null);
-    }
-  }, [selectedClipId, dispatch, onSelectClip]);
+    if (!selectedClipId) return;
+    dispatch({ type: "DELETE_CLIP", clipId: selectedClipId });
+    onSelectClip(null);
+  }, [dispatch, onSelectClip, selectedClipId]);
 
-  // Calculate playhead X position
-  const playheadX = totalDuration > 0 ? (playheadPosition / totalDuration) * timelineWidth : 0;
+  const playheadX = totalDuration > 0 ? (currentTime / totalDuration) * timelineWidth : 0;
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-2">
-        <button
-          onClick={handleSplit}
-          disabled={!selectedClipId}
-          className="px-3 py-1.5 bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed text-white text-xs rounded-lg transition-colors flex items-center gap-1"
-          title="Split at playhead"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeWidth={2} d="M12 2v20M4 12h4M16 12h4" />
-          </svg>
-          Split
-        </button>
-        <button
-          onClick={handleDelete}
-          disabled={!selectedClipId}
-          className="px-3 py-1.5 bg-red-600/50 hover:bg-red-500/70 disabled:opacity-30 disabled:cursor-not-allowed text-white text-xs rounded-lg transition-colors flex items-center gap-1"
-          title="Delete selected clip"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-          Delete
-        </button>
-        <div className="flex-1" />
+    <div className="flex h-full flex-col rounded-2xl border border-white/8 bg-[#111215]">
+      <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Sequence</p>
+          <p className="mt-1 text-sm text-white/80">Build the cut by dragging clips from the media bin.</p>
+        </div>
+
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setZoom((z) => Math.max(0.25, z / 1.5))}
-            className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white text-xs rounded transition-colors"
+            onClick={handleSplit}
+            disabled={!selectedClipId}
+            className="rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-medium text-white/82 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-35"
           >
-            -
+            Split
           </button>
-          <span className="text-xs text-white/40 w-12 text-center">{Math.round(zoom * 100)}%</span>
           <button
-            onClick={() => setZoom((z) => Math.min(4, z * 1.5))}
-            className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white text-xs rounded transition-colors"
+            onClick={handleDelete}
+            disabled={!selectedClipId}
+            className="rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-[11px] font-medium text-red-200 transition hover:bg-red-500/16 disabled:cursor-not-allowed disabled:opacity-35"
           >
-            +
+            Delete
           </button>
+          <div className="ml-2 flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-2 py-1.5">
+            <button
+              onClick={() => setZoom((value) => Math.max(0.35, value / 1.25))}
+              className="text-xs text-white/55 transition hover:text-white/85"
+            >
+              -
+            </button>
+            <span className="w-12 text-center text-[11px] font-medium text-white/55">{Math.round(zoom * 100)}%</span>
+            <button
+              onClick={() => setZoom((value) => Math.min(4, value * 1.25))}
+              className="text-xs text-white/55 transition hover:text-white/85"
+            >
+              +
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Timeline track */}
-      <div
-        ref={containerRef}
-        className="relative overflow-x-auto bg-white/5 rounded-xl border border-white/10"
-        style={{ height: 80 }}
-        onClick={handleTimelineClick}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-      >
-        <div className="relative h-full" style={{ width: timelineWidth }}>
-          {/* Time markers */}
-          {Array.from({ length: Math.ceil(totalDuration / 5) + 1 }).map((_, i) => {
-            const t = i * 5;
-            const x = (t / totalDuration) * timelineWidth;
-            return (
-              <div
-                key={i}
-                className="absolute top-0 h-full border-l border-white/5"
-                style={{ left: x }}
-              >
-                <span className="absolute top-1 left-1 text-[9px] text-white/20 font-mono">
-                  {formatTime(t)}
-                </span>
-              </div>
-            );
-          })}
+      <div className="flex min-h-0 flex-1">
+        <div className="w-16 shrink-0 border-r border-white/8 bg-[#0f1013]">
+          <div className="h-12 border-b border-white/8" />
+          <div className="flex h-[92px] items-center justify-center border-b border-white/8 text-xs font-medium uppercase tracking-[0.18em] text-white/42">
+            V1
+          </div>
+          <div className="flex h-[92px] items-center justify-center text-xs font-medium uppercase tracking-[0.18em] text-white/42">
+            A1
+          </div>
+        </div>
 
-          {/* Clips */}
-          {clips.map((clip, idx) => {
-            const widthPercent = totalDuration > 0 ? (clip.duration / totalDuration) * 100 : 0;
-            let leftPercent = 0;
-            for (let i = 0; i < idx; i++) {
-              leftPercent += (clips[i].duration / totalDuration) * 100;
-            }
+        <div
+          ref={containerRef}
+          className={`relative min-h-0 flex-1 overflow-auto ${
+            isDropTarget ? "bg-sky-400/[0.03]" : "bg-[#15171b]"
+          }`}
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest("[data-clip]")) return;
+            onSeek(getTimeFromX(event.clientX));
+          }}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setIsDropTarget(true);
+          }}
+          onDragLeave={() => setIsDropTarget(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setIsDropTarget(false);
+            const sourceClipId = event.dataTransfer.getData("application/x-vibecut-library-clip");
+            if (sourceClipId) onAppendFromLibrary(sourceClipId);
+          }}
+        >
+          <div className="relative" style={{ width: timelineWidth }}>
+            <div className="relative h-12 border-b border-white/8 bg-[#121418]">
+              {Array.from({ length: Math.ceil((totalDuration || 30) / 5) + 1 }).map((_, index) => {
+                const markerTime = index * 5;
+                const markerX = totalDuration > 0 ? (markerTime / totalDuration) * timelineWidth : index * 88 * zoom;
+                return (
+                  <div key={markerTime} className="absolute inset-y-0 border-l border-white/6" style={{ left: markerX }}>
+                    <span className="absolute left-1 top-2 text-[10px] uppercase tracking-[0.16em] text-white/24">
+                      {formatTime(markerTime)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
 
-            const isSelected = clip.id === selectedClipId;
+            <div className="relative h-[92px] border-b border-white/8 bg-[linear-gradient(180deg,_rgba(255,255,255,0.02),_transparent)]">
+              {clipsWithOffsets.map((clip, index) => {
+                const widthPercent = totalDuration > 0 ? (clip.duration / totalDuration) * 100 : 0;
+                const leftPercent = totalDuration > 0 ? (clip.sequenceStart / totalDuration) * 100 : 0;
+                const isSelected = clip.id === selectedClipId;
+                const title = clip.label || clip.source?.fileName || "Still";
 
-            return (
-              <div
-                key={clip.id}
-                data-clip
-                className={`absolute top-3 bottom-3 rounded-lg flex items-center overflow-hidden transition-shadow ${
-                  clip.type === "video"
-                    ? isSelected
-                      ? "bg-violet-600/60 ring-2 ring-violet-400"
-                      : "bg-violet-600/30 hover:bg-violet-600/40"
-                    : isSelected
-                    ? "bg-amber-500/60 ring-2 ring-amber-400"
-                    : "bg-amber-500/30 hover:bg-amber-500/40"
-                }`}
-                style={{
-                  left: `${leftPercent}%`,
-                  width: `${widthPercent}%`,
-                  minWidth: 4,
-                }}
-              >
-                {/* Trim start handle */}
-                {clip.type === "video" && (
+                return (
                   <div
-                    className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-white/30 rounded-l-lg"
-                    onMouseDown={(e) => handleClipMouseDown(e, clip, "trim-start", idx)}
-                  />
-                )}
+                    key={clip.id}
+                    data-clip
+                    className={`absolute inset-y-3 overflow-hidden rounded-xl border transition ${
+                      isSelected
+                        ? "border-sky-400/55 bg-sky-400/20 shadow-[0_0_0_1px_rgba(56,189,248,0.15)]"
+                        : "border-white/8 bg-[#2c4668] hover:border-white/18"
+                    }`}
+                    style={{ left: `${leftPercent}%`, width: `${widthPercent}%`, minWidth: 78 }}
+                  >
+                    {clip.type === "video" && (
+                      <div
+                        className="absolute inset-y-0 left-0 w-2 cursor-col-resize bg-black/10 hover:bg-white/18"
+                        onMouseDown={(event) => {
+                          event.stopPropagation();
+                          onSelectClip(clip.id);
+                          setDragState({
+                            type: "trim-start",
+                            clipId: clip.id,
+                            startX: event.clientX,
+                            originalClip: clip,
+                            clipIndex: index,
+                          });
+                        }}
+                      />
+                    )}
 
-                {/* Clip body (draggable to reorder) */}
-                <div
-                  className="flex-1 h-full flex items-center px-2 cursor-grab active:cursor-grabbing"
-                  onMouseDown={(e) => handleClipMouseDown(e, clip, "move", idx)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectClip(clip.id);
-                  }}
-                >
-                  <span className="text-[10px] text-white/60 truncate">
-                    {clip.type === "image"
-                      ? "IMG"
-                      : `${formatTime(clip.startTime)}-${formatTime(clip.endTime)}`}
-                  </span>
+                    <button
+                      type="button"
+                      className="flex h-full w-full items-end justify-between px-3 py-2 text-left"
+                      onMouseDown={(event) => {
+                        event.stopPropagation();
+                        onSelectClip(clip.id);
+                        setDragState({
+                          type: "move",
+                          clipId: clip.id,
+                          startX: event.clientX,
+                          originalClip: clip,
+                          clipIndex: index,
+                        });
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelectClip(clip.id);
+                      }}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-[11px] font-medium text-white/92">{title}</p>
+                        <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-white/44">
+                          {clip.type === "image"
+                            ? `still ${formatTime(clip.duration)}`
+                            : `${formatTime(clip.sourceStartTime)} - ${formatTime(clip.sourceEndTime)}`}
+                        </p>
+                      </div>
+                      <span className="ml-3 rounded-md bg-black/18 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/54">
+                        {formatTime(clip.duration)}
+                      </span>
+                    </button>
+
+                    {clip.type === "video" && (
+                      <div
+                        className="absolute inset-y-0 right-0 w-2 cursor-col-resize bg-black/10 hover:bg-white/18"
+                        onMouseDown={(event) => {
+                          event.stopPropagation();
+                          onSelectClip(clip.id);
+                          setDragState({
+                            type: "trim-end",
+                            clipId: clip.id,
+                            startX: event.clientX,
+                            originalClip: clip,
+                            clipIndex: index,
+                          });
+                        }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="relative h-[92px] bg-[linear-gradient(180deg,_rgba(56,189,248,0.04),_transparent)]">
+              {clipsWithOffsets.map((clip) => {
+                const widthPercent = totalDuration > 0 ? (clip.duration / totalDuration) * 100 : 0;
+                const leftPercent = totalDuration > 0 ? (clip.sequenceStart / totalDuration) * 100 : 0;
+                const waveform = clip.source?.waveform || [];
+                const isSelected = clip.id === selectedClipId;
+
+                return (
+                  <div
+                    key={`${clip.id}-audio`}
+                    className={`absolute inset-y-3 rounded-xl border ${
+                      isSelected
+                        ? "border-sky-400/45 bg-sky-500/10"
+                        : "border-white/8 bg-[#17303f]"
+                    }`}
+                    style={{ left: `${leftPercent}%`, width: `${widthPercent}%`, minWidth: 78 }}
+                  >
+                    <div className="flex h-full items-center gap-[2px] overflow-hidden px-3 py-3">
+                      {waveform.length > 0 ? (
+                        renderWaveform(waveform)
+                      ) : (
+                        <div className="h-px w-full bg-sky-200/28" />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {clips.length === 0 && (
+              <div className="pointer-events-none absolute inset-x-0 top-20 flex justify-center">
+                <div className="rounded-full border border-dashed border-white/10 bg-white/[0.03] px-4 py-2 text-[11px] uppercase tracking-[0.18em] text-white/34">
+                  Drop ready clips here to start the sequence
                 </div>
-
-                {/* Trim end handle */}
-                {clip.type === "video" && (
-                  <div
-                    className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-white/30 rounded-r-lg"
-                    onMouseDown={(e) => handleClipMouseDown(e, clip, "trim-end", idx)}
-                  />
-                )}
               </div>
-            );
-          })}
+            )}
 
-          {/* Playhead */}
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none"
-            style={{ left: playheadX }}
-          >
-            <div className="absolute -top-1 -left-1.5 w-3.5 h-3 bg-red-500 rounded-sm" />
+            <div
+              className="pointer-events-none absolute inset-y-0 z-10 w-px bg-sky-400"
+              style={{ left: playheadX }}
+            >
+              <div className="absolute left-1/2 top-2 h-3 w-3 -translate-x-1/2 rotate-45 bg-sky-400" />
+            </div>
           </div>
         </div>
       </div>

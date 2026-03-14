@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Image from "next/image";
 
 interface ImageGenPanelProps {
   onInsertImage: (imageSrc: string) => void;
@@ -89,7 +90,14 @@ export default function ImageGenPanel({ onInsertImage, contextText }: ImageGenPa
 
       {generatedImage && (
         <div className="space-y-2">
-          <img src={generatedImage} alt="Generated" className="w-full rounded-lg" />
+          <Image
+            src={generatedImage}
+            alt="Generated"
+            width={1024}
+            height={1024}
+            unoptimized
+            className="w-full rounded-lg"
+          />
           <button
             onClick={() => {
               onInsertImage(generatedImage);

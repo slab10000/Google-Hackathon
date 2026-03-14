@@ -38,8 +38,6 @@ export default function ExportButton({ clips, videoFile }: ExportButtonProps) {
       }
 
       // Build concat file
-      let imgIdx = 0;
-      const parts: string[] = [];
       const filterParts: string[] = [];
       const concatInputs: string[] = [];
 
@@ -54,7 +52,6 @@ export default function ExportButton({ clips, videoFile }: ExportButtonProps) {
       }
 
       // Build filter complex
-      const videoClips = clips.filter((c) => c.type === "video");
       let filterIdx = 0;
 
       for (const clip of clips) {
@@ -62,10 +59,10 @@ export default function ExportButton({ clips, videoFile }: ExportButtonProps) {
           const label = `v${filterIdx}`;
           const alabel = `a${filterIdx}`;
           filterParts.push(
-            `[0:v]trim=start=${clip.startTime}:end=${clip.endTime},setpts=PTS-STARTPTS,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2[${label}]`
+            `[0:v]trim=start=${clip.sourceStartTime}:end=${clip.sourceEndTime},setpts=PTS-STARTPTS,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2[${label}]`
           );
           filterParts.push(
-            `[0:a]atrim=start=${clip.startTime}:end=${clip.endTime},asetpts=PTS-STARTPTS[${alabel}]`
+            `[0:a]atrim=start=${clip.sourceStartTime}:end=${clip.sourceEndTime},asetpts=PTS-STARTPTS[${alabel}]`
           );
           concatInputs.push(`[${label}][${alabel}]`);
           filterIdx++;
@@ -80,7 +77,6 @@ export default function ExportButton({ clips, videoFile }: ExportButtonProps) {
           );
           concatInputs.push(`[${label}][${alabel}]`);
           inputIdx++;
-          imgIdx++;
           filterIdx++;
         }
       }

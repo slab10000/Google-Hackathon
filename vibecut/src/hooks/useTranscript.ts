@@ -3,38 +3,21 @@ import { useState, useCallback } from "react";
 import { TranscriptSegment } from "@/types";
 
 export function useTranscript() {
-  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [activeJobs, setActiveJobs] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const transcribe = useCallback(async (input: Blob | File) => {
-    setIsTranscribing(true);
+  const transcribe = useCallback(async (file: File, sourceClipId: string) => {
+    setActiveJobs((count) => count + 1);
     setError(null);
-    try {
-      const isVideoFile = input instanceof File && input.type.startsWith("video/");
-      const res = isVideoFile
-        ? await (() => {
-            const formData = new FormData();
-            formData.append("video", input);
-            return fetch("/api/transcribe", {
-              method: "POST",
-              body: formData,
-            });
-          })()
-        : await (() => {
-            const audioBlob = input;
-            return audioBlob.arrayBuffer().then((buffer) => {
-              const base64 = btoa(
-                new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-              );
 
-              return fetch("/api/transcribe", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ audioBase64: base64, mimeType: audioBlob.type }),
-              });
-            });
-          })();
+    try {
+      const formData = new FormData();
+      formData.append("video", file);
+
+      const res = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -42,22 +25,42 @@ export function useTranscript() {
       }
 
       const data = await res.json();
-      setSegments(data.segments);
-      return data.segments as TranscriptSegment[];
+      return (data.segments as Omit<TranscriptSegment, "sourceClipId">[]).map((segment) => ({
+        ...segment,
+        sourceClipId,
+      }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Transcription failed";
       setError(msg);
       throw err;
     } finally {
-      setIsTranscribing(false);
+      setActiveJobs((count) => Math.max(0, count - 1));
     }
   }, []);
 
-  const updateEmbeddings = useCallback((embeddings: number[][]) => {
-    setSegments((prev) =>
-      prev.map((seg, i) => ({ ...seg, embedding: embeddings[i] || seg.embedding }))
-    );
+  const embedTexts = useCallback(async (texts: string[]) => {
+    if (texts.length === 0) return [] as number[][];
+
+    const res = await fetch("/api/embeddings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || `Embedding failed: ${res.statusText}`);
+    }
+
+    const data = await res.json();
+    return data.embeddings as number[][];
   }, []);
 
-  return { segments, isTranscribing, error, transcribe, updateEmbeddings, setSegments };
+  return {
+    isTranscribing: activeJobs > 0,
+    activeJobs,
+    error,
+    transcribe,
+    embedTexts,
+  };
 }
