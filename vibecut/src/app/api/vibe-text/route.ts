@@ -13,10 +13,10 @@ export async function POST(req: Request) {
     }
 
     if (action === "style") {
-      const { text } = body;
+      const { text, referenceImage } = body;
       if (!text) return NextResponse.json({ error: "Missing text parameter" }, { status: 400 });
-      const style = await generateStyleSuggestion(text);
-      return NextResponse.json({ style });
+      const result = await generateStyleSuggestion(text, referenceImage);
+      return NextResponse.json(result);
     }
 
     if (action === "image") {

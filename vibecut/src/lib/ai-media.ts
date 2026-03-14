@@ -18,20 +18,60 @@ const createBlankImage = (width: number, height: number): string => {
 const BLACK_1X1_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 
-export const generateStyleSuggestion = async (text: string): Promise<string> => {
+export const generateStyleSuggestion = async (text: string, referenceImage?: string): Promise<{ style: string, typography: string }> => {
   const ai = getGeminiClient();
+  const parts: any[] = [];
+
+  const genericPrompt = referenceImage 
+    ? `Analyze this image and generate two descriptions for a cinematic text animation of the word/phrase: "${text}".
+       The styling must perfectly match the material, lighting, and environment of this frame.`
+    : `Generate two descriptions for a cinematic text animation of the word/phrase: "${text}".
+       Focus on material, lighting, and environment.`;
+
+  parts.push({
+    text: `${genericPrompt}
+    
+    Return the response strictly as a JSON object:
+    - "style": A short (10-15 words) description of the visual atmosphere and environment (e.g., "Ancient stone temple with mossy walls and golden sunbeams").
+    - "typography": A short (10-15 words) description of how the text itself should look (e.g., "Bold, weathered stone letters with cracked textures and soft internal glow").
+    `
+  });
+
+  if (referenceImage) {
+    const [mimeTypePart, data] = referenceImage.split(';base64,');
+    parts.push({
+      inlineData: {
+        data: data,
+        mimeType: mimeTypePart.replace('data:', '')
+      }
+    });
+  }
+
   try {
     const response = await ai.models.generateContent({
       model: MODELS.REASONING,
-      contents: `Generate a single, creative, short (10-15 words) visual art direction description for a cinematic text animation of the word/phrase: "${text}". 
-      Focus on material, lighting, and environment. 
-      Examples: "Formed by fluffy white clouds in a deep blue sky", "Glowing neon signs reflected in a rainy street", "Carved from ancient stone in a mossy forest".
-      Output ONLY the description.`
+      contents: [{ role: 'user', parts }],
+      config: {
+        responseMimeType: "application/json",
+      },
     });
-    return response.text?.trim() || "";
+    
+    const resText = response.text?.trim() || "{}";
+    let data;
+    try {
+        data = JSON.parse(resText);
+    } catch (e) {
+        const jsonMatch = resText.match(/```json\n([\s\S]*?)\n```/);
+        data = jsonMatch ? JSON.parse(jsonMatch[1]) : {};
+    }
+
+    return {
+      style: data.style || "",
+      typography: data.typography || ""
+    };
   } catch (e) {
     console.error("Failed to generate style suggestion", e);
-    return "";
+    return { style: "", typography: "" };
   }
 };
 

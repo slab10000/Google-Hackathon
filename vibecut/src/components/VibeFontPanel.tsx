@@ -26,6 +26,7 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
   // Video State
   const [step, setStep] = useState<Step>("input");
   const [artDirection, setArtDirection] = useState("");
+  const [typographyPrompt, setTypographyPrompt] = useState("");
   const [referenceFrame, setReferenceFrame] = useState<string | null>(null);
   const [baseImage, setBaseImage] = useState<string | null>(null);
   const [baseImageMimeType, setBaseImageMimeType] = useState<string>("");
@@ -120,7 +121,7 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
       const res = await fetch("/api/vibe-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "style", text }),
+        body: JSON.stringify({ action: "style", text, referenceImage: frameBase64 }),
       });
 
       if (!res.ok) {
@@ -128,8 +129,9 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
         throw new Error(data.error || "Failed to generate style");
       }
 
-      const { style } = await res.json();
+      const { style, typography } = await res.json();
       setArtDirection(style);
+      setTypographyPrompt(typography);
       setStep("style-review");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Style generation failed");
@@ -149,6 +151,7 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
           action: "image", 
           text, 
           style: artDirection,
+          typographyPrompt: typographyPrompt,
           referenceImage: referenceFrame
         }),
       });
@@ -323,14 +326,25 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
 
             {step === "style-review" && (
               <div className="space-y-4">
-                 <div>
-                    <p className="text-[10px] uppercase text-white/40 mb-1">Art Direction</p>
-                    <textarea
-                      value={artDirection}
-                      onChange={(e) => setArtDirection(e.target.value)}
-                      rows={4}
-                      className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white focus:outline-none resize-none"
-                    />
+                 <div className="grid grid-cols-2 gap-4">
+                   <div>
+                      <p className="text-[10px] uppercase text-white/40 mb-1">Art Direction</p>
+                      <textarea
+                        value={artDirection}
+                        onChange={(e) => setArtDirection(e.target.value)}
+                        rows={3}
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white focus:outline-none resize-none"
+                      />
+                   </div>
+                   <div>
+                      <p className="text-[10px] uppercase text-white/40 mb-1">Typography Prompt</p>
+                      <textarea
+                        value={typographyPrompt}
+                        onChange={(e) => setTypographyPrompt(e.target.value)}
+                        rows={3}
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white focus:outline-none resize-none"
+                      />
+                   </div>
                  </div>
                  
                  <div className="flex gap-2">
