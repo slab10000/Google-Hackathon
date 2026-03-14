@@ -166,6 +166,21 @@ async function detectPauseRanges(audioPath: string) {
   return pauses;
 }
 
+async function hasAudioStream(filePath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-show_entries", "stream=codec_type",
+      "-of", "csv=p=0",
+      filePath
+    ]);
+    return stdout.split("\n").some(line => line.trim() === "audio");
+  } catch (error) {
+    console.warn("ffprobe check failed, assuming no audio", error);
+    return false;
+  }
+}
+
 async function extractAudioFromVideoFile(videoFile: File) {
   const tempDir = await mkdtemp(join(tmpdir(), "vibecut-"));
   const inputExt = extname(videoFile.name) || ".mp4";
@@ -175,6 +190,16 @@ async function extractAudioFromVideoFile(videoFile: File) {
   try {
     const buffer = Buffer.from(await videoFile.arrayBuffer());
     await writeFile(inputPath, buffer);
+
+    const audioExists = await hasAudioStream(inputPath);
+    if (!audioExists) {
+      return {
+        audioBase64: null,
+        mimeType: null,
+        audioPath: null,
+        cleanupPath: tempDir,
+      };
+    }
 
     await execFileAsync("ffmpeg", [
       "-i",
@@ -258,6 +283,10 @@ export async function POST(req: Request) {
   try {
     const { audioBase64, mimeType, audioPath, cleanupPath: payloadCleanupPath } = await getAudioPayload(req);
     cleanupPath = payloadCleanupPath;
+
+    if (!audioBase64) {
+      return NextResponse.json({ segments: [], pauses: [] });
+    }
 
     const ai = getGeminiClient();
     const response = await ai.models.generateContent({
