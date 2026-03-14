@@ -1,4 +1,4 @@
-import { TimelineClip, TimelineState, TimelineAction } from "@/types";
+import { TimelineClip, TimelineState, TimelineAction, TimelineRange } from "@/types";
 import { v4 as uuid } from "uuid";
 
 function computeTotalDuration(clips: TimelineClip[]): number {
@@ -22,6 +22,68 @@ function buildVideoClip(
   };
 }
 
+function applyRemovedRanges(clips: TimelineClip[], ranges: TimelineRange[]) {
+  const removeBySource = new Map<string, { start: number; end: number }[]>();
+  for (const range of ranges) {
+    const normalizedStart = Math.min(range.startTime, range.endTime);
+    const normalizedEnd = Math.max(range.startTime, range.endTime);
+    if (normalizedEnd <= normalizedStart) continue;
+
+    const sourceRanges = removeBySource.get(range.sourceClipId) || [];
+    sourceRanges.push({ start: normalizedStart, end: normalizedEnd });
+    removeBySource.set(range.sourceClipId, sourceRanges);
+  }
+
+  const normalizedRanges = new Map<string, { start: number; end: number }[]>();
+  for (const [sourceClipId, sourceRanges] of removeBySource.entries()) {
+    const merged: { start: number; end: number }[] = [];
+    for (const range of sourceRanges.sort((a, b) => a.start - b.start)) {
+      const previous = merged[merged.length - 1];
+      if (!previous || range.start > previous.end) {
+        merged.push({ ...range });
+        continue;
+      }
+
+      previous.end = Math.max(previous.end, range.end);
+    }
+
+    normalizedRanges.set(sourceClipId, merged);
+  }
+
+  const newClips: TimelineClip[] = [];
+  for (const clip of clips) {
+    if (clip.type !== "video" || !clip.sourceClipId) {
+      newClips.push(clip);
+      continue;
+    }
+
+    const removeRanges = normalizedRanges.get(clip.sourceClipId);
+    if (!removeRanges || removeRanges.length === 0) {
+      newClips.push(clip);
+      continue;
+    }
+
+    let currentStart = clip.sourceStartTime;
+    for (const range of removeRanges) {
+      if (range.end <= clip.sourceStartTime || range.start >= clip.sourceEndTime) continue;
+      const cutStart = Math.max(range.start, clip.sourceStartTime);
+      const cutEnd = Math.min(range.end, clip.sourceEndTime);
+
+      if (cutStart > currentStart) {
+        newClips.push(buildVideoClip(clip.sourceClipId, currentStart, cutStart, clip.label));
+      }
+
+      currentStart = Math.max(currentStart, cutEnd);
+    }
+
+    if (currentStart < clip.sourceEndTime) {
+      newClips.push(buildVideoClip(clip.sourceClipId, currentStart, clip.sourceEndTime, clip.label));
+    }
+  }
+
+  return newClips;
+}
+
 export function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
   switch (action.type) {
     case "ADD_SOURCE_CLIP": {
@@ -31,52 +93,19 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
     }
 
     case "REMOVE_SEGMENTS": {
-      const removeBySource = new Map<string, { start: number; end: number }[]>();
-      for (const segment of action.segments) {
-        const ranges = removeBySource.get(segment.sourceClipId) || [];
-        ranges.push({ start: segment.startTime, end: segment.endTime });
-        removeBySource.set(segment.sourceClipId, ranges);
-      }
+      const newClips = applyRemovedRanges(
+        state.clips,
+        action.segments.map((segment) => ({
+          sourceClipId: segment.sourceClipId,
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+        }))
+      );
+      return { ...state, clips: newClips, totalDuration: computeTotalDuration(newClips) };
+    }
 
-      const normalizedRanges = new Map<string, { start: number; end: number }[]>();
-      for (const [sourceClipId, ranges] of removeBySource.entries()) {
-        normalizedRanges.set(
-          sourceClipId,
-          ranges.sort((a, b) => a.start - b.start)
-        );
-      }
-
-      const newClips: TimelineClip[] = [];
-      for (const clip of state.clips) {
-        if (clip.type !== "video" || !clip.sourceClipId) {
-          newClips.push(clip);
-          continue;
-        }
-
-        const removeRanges = normalizedRanges.get(clip.sourceClipId);
-        if (!removeRanges || removeRanges.length === 0) {
-          newClips.push(clip);
-          continue;
-        }
-
-        let currentStart = clip.sourceStartTime;
-        for (const range of removeRanges) {
-          if (range.end <= clip.sourceStartTime || range.start >= clip.sourceEndTime) continue;
-          const cutStart = Math.max(range.start, clip.sourceStartTime);
-          const cutEnd = Math.min(range.end, clip.sourceEndTime);
-
-          if (cutStart > currentStart) {
-            newClips.push(buildVideoClip(clip.sourceClipId, currentStart, cutStart, clip.label));
-          }
-
-          currentStart = Math.max(currentStart, cutEnd);
-        }
-
-        if (currentStart < clip.sourceEndTime) {
-          newClips.push(buildVideoClip(clip.sourceClipId, currentStart, clip.sourceEndTime, clip.label));
-        }
-      }
-
+    case "REMOVE_RANGES": {
+      const newClips = applyRemovedRanges(state.clips, action.ranges);
       return { ...state, clips: newClips, totalDuration: computeTotalDuration(newClips) };
     }
 

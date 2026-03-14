@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { LibraryClip } from "@/types";
 
 interface MediaBinProps {
@@ -7,6 +7,13 @@ interface MediaBinProps {
   selectedClipId: string | null;
   onSelectClip: (clipId: string) => void;
   onAddFiles: (files: File[]) => void;
+  searchDraft: string;
+  activeSearchQuery: string;
+  searchScores: Map<string, number>;
+  isSearching: boolean;
+  onSearchDraftChange: (value: string) => void;
+  onSearchSubmit: () => void;
+  onClearSearch: () => void;
 }
 
 function formatTime(seconds: number) {
@@ -28,8 +35,21 @@ function statusClasses(status: LibraryClip["status"]) {
   }
 }
 
-export default function MediaBin({ clips, selectedClipId, onSelectClip, onAddFiles }: MediaBinProps) {
+export default function MediaBin({
+  clips,
+  selectedClipId,
+  onSelectClip,
+  onAddFiles,
+  searchDraft,
+  activeSearchQuery,
+  searchScores,
+  isSearching,
+  onSearchDraftChange,
+  onSearchSubmit,
+  onClearSearch,
+}: MediaBinProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const hasActiveSearch = activeSearchQuery.trim().length > 0;
 
   const handleFiles = useCallback(
     (files: FileList | File[]) => {
@@ -39,8 +59,19 @@ export default function MediaBin({ clips, selectedClipId, onSelectClip, onAddFil
     [onAddFiles]
   );
 
+  const orderedClips = useMemo(() => {
+    if (!hasActiveSearch) return clips;
+
+    const originalIndexes = new Map(clips.map((clip, index) => [clip.id, index]));
+    return [...clips].sort((left, right) => {
+      const scoreDiff = (searchScores.get(right.id) ?? -1) - (searchScores.get(left.id) ?? -1);
+      if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
+      return (originalIndexes.get(left.id) ?? 0) - (originalIndexes.get(right.id) ?? 0);
+    });
+  }, [clips, hasActiveSearch, searchScores]);
+
   return (
-    <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-white/8 bg-[#141518]">
+    <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#141518]">
       <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
         <div className="min-w-0 flex-1">
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/35">Project</p>
@@ -85,6 +116,40 @@ export default function MediaBin({ clips, selectedClipId, onSelectClip, onAddFil
       </div>
 
       <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="px-4 pb-3">
+          <div className="flex min-w-0 flex-wrap gap-2">
+            <input
+              type="text"
+              placeholder="Search uploaded videos..."
+              value={searchDraft}
+              onChange={(event) => onSearchDraftChange(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && onSearchSubmit()}
+              className="min-w-0 flex-1 basis-40 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-sm text-white placeholder:text-white/26 focus:border-sky-400/40 focus:outline-none"
+            />
+            <button
+              onClick={onSearchSubmit}
+              disabled={isSearching || !searchDraft.trim()}
+              className="shrink-0 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-medium text-white/82 transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isSearching ? "..." : "Search"}
+            </button>
+            {hasActiveSearch && (
+              <button
+                onClick={onClearSearch}
+                className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/60 transition hover:bg-white/[0.08] hover:text-white/82"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 text-[10px] uppercase tracking-[0.18em] text-white/32">
+            <span className="min-w-0 truncate">
+              {hasActiveSearch ? `Results for "${activeSearchQuery}"` : "Semantic clip search"}
+            </span>
+            <span className="shrink-0">{hasActiveSearch ? `${searchScores.size} ranked clips` : "Search by speech meaning"}</span>
+          </div>
+        </div>
+
         <div className="flex items-center justify-between px-4 pb-2">
           <span className="text-[10px] uppercase tracking-[0.22em] text-white/30">Clips</span>
           <span className="text-[11px] text-white/35">{clips.length} items</span>
@@ -97,8 +162,9 @@ export default function MediaBin({ clips, selectedClipId, onSelectClip, onAddFil
             </div>
           ) : (
             <div className="space-y-2">
-              {clips.map((clip) => {
+              {orderedClips.map((clip) => {
                 const isSelected = clip.id === selectedClipId;
+                const searchScore = searchScores.get(clip.id);
                 return (
                   <button
                     key={clip.id}
@@ -127,11 +193,18 @@ export default function MediaBin({ clips, selectedClipId, onSelectClip, onAddFil
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-2">
                           <p className="truncate text-[12px] font-medium text-white/88">{clip.fileName}</p>
-                          <span
-                            className={`rounded-md border px-1.5 py-1 text-[10px] uppercase tracking-[0.16em] ${statusClasses(clip.status)}`}
-                          >
-                            {clip.status}
-                          </span>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {hasActiveSearch && searchScore !== undefined && (
+                              <span className="rounded-md border border-amber-400/20 bg-amber-400/10 px-1.5 py-1 text-[10px] uppercase tracking-[0.16em] text-amber-300">
+                                {Math.round(searchScore * 100)}%
+                              </span>
+                            )}
+                            <span
+                              className={`rounded-md border px-1.5 py-1 text-[10px] uppercase tracking-[0.16em] ${statusClasses(clip.status)}`}
+                            >
+                              {clip.status}
+                            </span>
+                          </div>
                         </div>
                         <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/32">
                           <span>{formatTime(clip.duration)}</span>

@@ -5,7 +5,9 @@ import {
   EditCommandResponse,
   LibraryClip,
   MonitorMode,
+  PauseRange,
   TimelineClip,
+  TimelineRange,
   TranscriptSegment,
 } from "@/types";
 import { cosineSimilarity } from "@/lib/embeddings";
@@ -20,6 +22,26 @@ import ImageGenPanel from "./ImageGenPanel";
 import { v4 as uuid } from "uuid";
 
 type SearchHit = { id: string; sourceClipId: string; score: number };
+const ROOM_TONE_SECONDS = 0.12;
+const DEFAULT_PAUSE_THRESHOLD_SECONDS = 0.4;
+const LEFT_SIDEBAR_MIN_WIDTH = 240;
+const LEFT_SIDEBAR_DEFAULT_WIDTH = 300;
+const LEFT_SIDEBAR_MAX_WIDTH = 520;
+const RIGHT_SIDEBAR_MIN_WIDTH = 280;
+const RIGHT_SIDEBAR_DEFAULT_WIDTH = 360;
+const RIGHT_SIDEBAR_MAX_WIDTH = 560;
+const CENTER_PANEL_MIN_WIDTH = 720;
+const RESIZE_HANDLE_WIDTH = 10;
+
+type SidebarEdge = "left" | "right";
+
+interface ResizeState {
+  edge: SidebarEdge;
+  startX: number;
+  startLeftWidth: number;
+  startRightWidth: number;
+  containerWidth: number;
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -92,8 +114,90 @@ function getVideoDuration(objectUrl: string) {
   });
 }
 
+function mergeTimelineRanges(ranges: TimelineRange[]) {
+  const mergedBySource = new Map<string, TimelineRange[]>();
+
+  for (const range of ranges) {
+    if (range.endTime <= range.startTime) continue;
+    const nextRanges = [...(mergedBySource.get(range.sourceClipId) || []), range].sort(
+      (a, b) => a.startTime - b.startTime
+    );
+
+    const merged: TimelineRange[] = [];
+    for (const item of nextRanges) {
+      const previous = merged[merged.length - 1];
+      if (!previous || item.startTime > previous.endTime + 0.02) {
+        merged.push({ ...item });
+        continue;
+      }
+
+      previous.endTime = Math.max(previous.endTime, item.endTime);
+    }
+
+    mergedBySource.set(range.sourceClipId, merged);
+  }
+
+  return Array.from(mergedBySource.values()).flat();
+}
+
+function trimPauseForRoomTone(
+  pause: PauseRange,
+  bounds?: { startTime: number; endTime: number } | null,
+  roomToneSeconds = ROOM_TONE_SECONDS
+) {
+  const boundedStart = bounds ? Math.max(bounds.startTime, pause.startTime) : pause.startTime;
+  const boundedEnd = bounds ? Math.min(bounds.endTime, pause.endTime) : pause.endTime;
+  const boundedDuration = boundedEnd - boundedStart;
+
+  if (boundedDuration <= roomToneSeconds) return null;
+
+  const sidePadding = roomToneSeconds / 2;
+  const startTime = boundedStart + sidePadding;
+  const endTime = boundedEnd - sidePadding;
+
+  if (endTime <= startTime) return null;
+
+  return {
+    sourceClipId: pause.sourceClipId,
+    startTime,
+    endTime,
+  };
+}
+
+function SidebarResizeHandle({
+  edge,
+  isActive,
+  onPointerDown,
+}: {
+  edge: SidebarEdge;
+  isActive: boolean;
+  onPointerDown: (edge: SidebarEdge, event: React.PointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={edge === "left" ? "Resize media bin" : "Resize dock"}
+      onPointerDown={(event) => onPointerDown(edge, event)}
+      className="group relative flex h-full min-h-0 cursor-col-resize items-stretch justify-center touch-none select-none bg-[#0d0e12]"
+    >
+      <div
+        className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition ${
+          isActive ? "bg-sky-400/70" : "bg-white/8 group-hover:bg-white/18"
+        }`}
+      />
+      <div
+        className={`my-3 w-2 rounded-full transition ${
+          isActive ? "bg-sky-400/16" : "bg-transparent group-hover:bg-white/[0.04]"
+        }`}
+      />
+    </div>
+  );
+}
+
 export default function Editor() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const editorColumnsRef = useRef<HTMLDivElement>(null);
   const monitorModeRef = useRef<MonitorMode>("source");
   const activeProgramClipRef = useRef<string | null>(null);
   const libraryClipsRef = useRef<LibraryClip[]>([]);
@@ -105,7 +209,12 @@ export default function Editor() {
   const [selectedTimelineClipId, setSelectedTimelineClipId] = useState<string | null>(null);
   const [monitorMode, setMonitorMode] = useState<MonitorMode>("source");
   const [dockTab, setDockTab] = useState<DockTab>("ai");
-  const [selectedSegmentIds, setSelectedSegmentIds] = useState<Set<string>>(new Set());
+  const [selectedWordIds, setSelectedWordIds] = useState<Set<string>>(new Set());
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(LEFT_SIDEBAR_DEFAULT_WIDTH);
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(RIGHT_SIDEBAR_DEFAULT_WIDTH);
+  const [resizeState, setResizeState] = useState<ResizeState | null>(null);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [activeSearchQuery, setActiveSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchHit[] | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isEditProcessing, setIsEditProcessing] = useState(false);
@@ -154,6 +263,11 @@ export default function Editor() {
     [libraryClips]
   );
 
+  const transcriptWords = useMemo(
+    () => transcriptClip?.transcriptSegments.flatMap((segment) => segment.words) || [],
+    [transcriptClip]
+  );
+
   const searchableSegments = useMemo(
     () => allTranscriptSegments.filter((segment) => segment.embedding),
     [allTranscriptSegments]
@@ -168,6 +282,15 @@ export default function Editor() {
     () => libraryClips.filter((clip) => clip.status === "queued" || clip.status === "processing").length,
     [libraryClips]
   );
+
+  const clipSearchScores = useMemo(() => {
+    const scores = new Map<string, number>();
+    for (const result of searchResults || []) {
+      const current = scores.get(result.sourceClipId) ?? -1;
+      if (result.score > current) scores.set(result.sourceClipId, result.score);
+    }
+    return scores;
+  }, [searchResults]);
 
   const currentProgramPlacement = useMemo(() => {
     if (clipsWithOffsets.length === 0) return null;
@@ -208,10 +331,22 @@ export default function Editor() {
     transcriptClip,
   ]);
 
-  const selectedTranscriptRange =
-    selectedTimelineClip?.sourceClipId === transcriptSourceClipId && selectedTimelineClip.type === "video"
-      ? { startTime: selectedTimelineClip.sourceStartTime, endTime: selectedTimelineClip.sourceEndTime }
-      : null;
+  const selectedTranscriptRange = useMemo(
+    () =>
+      selectedTimelineClip?.sourceClipId === transcriptSourceClipId && selectedTimelineClip.type === "video"
+        ? { startTime: selectedTimelineClip.sourceStartTime, endTime: selectedTimelineClip.sourceEndTime }
+        : null,
+    [selectedTimelineClip, transcriptSourceClipId]
+  );
+
+  const transcriptPauses = useMemo(() => {
+    if (!transcriptClip) return [] as PauseRange[];
+
+    return transcriptClip.pauseRanges.filter((pause) => {
+      if (!selectedTranscriptRange) return true;
+      return pause.endTime > selectedTranscriptRange.startTime && pause.startTime < selectedTranscriptRange.endTime;
+    });
+  }, [selectedTranscriptRange, transcriptClip]);
 
   const monitorVideoUrl =
     monitorMode === "source"
@@ -322,7 +457,7 @@ export default function Editor() {
       setClipState(clip.id, (current) => ({ ...current, status: "processing", error: undefined }));
 
       try {
-        const transcriptSegments = await transcribe(clip.file, clip.id);
+        const { segments: transcriptSegments, pauses } = await transcribe(clip.file, clip.id);
         const embeddings = await embedTexts(transcriptSegments.map((segment) => segment.text));
         const hydratedSegments = transcriptSegments.map((segment, index) => ({
           ...segment,
@@ -334,6 +469,7 @@ export default function Editor() {
           ...current,
           status: "ready",
           transcriptSegments: hydratedSegments,
+          pauseRanges: pauses,
           embeddingsReady: true,
           waveform,
         }));
@@ -368,6 +504,7 @@ export default function Editor() {
             duration,
             status: "queued" as const,
             transcriptSegments: [],
+            pauseRanges: [],
             embeddingsReady: false,
             waveform: placeholderWaveform(file.name),
           };
@@ -436,14 +573,27 @@ export default function Editor() {
 
   const handleSearch = useCallback(
     async (query: string) => {
-      if (searchableSegments.length === 0) return;
+      const trimmedQuery = query.trim();
+      if (!trimmedQuery) {
+        setActiveSearchQuery("");
+        setSearchResults(null);
+        return;
+      }
+
+      setActiveSearchQuery(trimmedQuery);
+
+      if (searchableSegments.length === 0) {
+        setSearchResults([]);
+        setDockTab("transcript");
+        return;
+      }
 
       setIsSearching(true);
       try {
         const res = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify({ query: trimmedQuery }),
         });
 
         if (!res.ok) throw new Error("Search failed");
@@ -478,23 +628,87 @@ export default function Editor() {
     [libraryClips, searchableSegments, segmentLookup, syncSourcePreview]
   );
 
-  const handleToggleSegment = useCallback((segmentId: string) => {
-    setSelectedSegmentIds((ids) => {
-      const next = new Set(ids);
-      if (next.has(segmentId)) next.delete(segmentId);
-      else next.add(segmentId);
-      return next;
-    });
+  const handleSearchSubmit = useCallback(() => {
+    void handleSearch(searchDraft);
+  }, [handleSearch, searchDraft]);
+
+  const handleClearSearch = useCallback(() => {
+    setSearchDraft("");
+    setActiveSearchQuery("");
+    setSearchResults(null);
   }, []);
 
-  const handleRemoveSelected = useCallback(() => {
-    const selectedSegments = transcriptClip?.transcriptSegments.filter((segment) => selectedSegmentIds.has(segment.id)) || [];
-    if (selectedSegments.length === 0) return;
+  const handleResizeStart = useCallback(
+    (edge: SidebarEdge, event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
 
-    dispatch({ type: "REMOVE_SEGMENTS", segments: selectedSegments });
-    setSelectedSegmentIds(new Set());
+      const container = editorColumnsRef.current;
+      if (!container) return;
+
+      setResizeState({
+        edge,
+        startX: event.clientX,
+        startLeftWidth: leftSidebarWidth,
+        startRightWidth: rightSidebarWidth,
+        containerWidth: container.getBoundingClientRect().width,
+      });
+    },
+    [leftSidebarWidth, rightSidebarWidth]
+  );
+
+  const handleWordSelectionChange = useCallback((wordIds: string[]) => {
+    setSelectedWordIds(new Set(wordIds));
+  }, []);
+
+  const handleRemoveSelectedWords = useCallback(() => {
+    const selectedWords = transcriptWords.filter((word) => selectedWordIds.has(word.id));
+    if (selectedWords.length === 0) return;
+
+    const ranges = mergeTimelineRanges(
+      selectedWords.map((word) => ({
+        sourceClipId: word.sourceClipId,
+        startTime: word.startTime,
+        endTime: word.endTime,
+      }))
+    );
+
+    if (ranges.length === 0) return;
+
+    dispatch({ type: "REMOVE_RANGES", ranges });
+    setSelectedWordIds(new Set());
     setMonitorMode("program");
-  }, [dispatch, selectedSegmentIds, transcriptClip]);
+  }, [dispatch, selectedWordIds, transcriptWords]);
+
+  const handleRemovePause = useCallback(
+    (pauseId: string) => {
+      const pause = transcriptPauses.find((item) => item.id === pauseId);
+      if (!pause) return;
+
+      const range = trimPauseForRoomTone(pause, selectedTranscriptRange);
+      if (!range) return;
+
+      dispatch({ type: "REMOVE_RANGES", ranges: [range] });
+      setMonitorMode("program");
+    },
+    [dispatch, selectedTranscriptRange, transcriptPauses]
+  );
+
+  const handleRemoveLongPauses = useCallback(
+    (minimumDuration = DEFAULT_PAUSE_THRESHOLD_SECONDS) => {
+      const ranges = mergeTimelineRanges(
+        transcriptPauses
+          .filter((pause) => pause.duration >= minimumDuration)
+          .map((pause) => trimPauseForRoomTone(pause, selectedTranscriptRange))
+          .filter((range): range is TimelineRange => Boolean(range))
+      );
+
+      if (ranges.length === 0) return;
+
+      dispatch({ type: "REMOVE_RANGES", ranges });
+      setMonitorMode("program");
+    },
+    [dispatch, selectedTranscriptRange, transcriptPauses]
+  );
 
   const handleInsertImage = useCallback(
     (imageSrc: string) => {
@@ -572,14 +786,12 @@ export default function Editor() {
           if (operation.type === "remove_time_range") {
             if (operation.startTime === undefined || operation.endTime === undefined || !operation.sourceClipId) continue;
             dispatch({
-              type: "REMOVE_SEGMENTS",
-              segments: [
+              type: "REMOVE_RANGES",
+              ranges: [
                 {
-                  id: uuid(),
                   sourceClipId: operation.sourceClipId,
                   startTime: operation.startTime,
                   endTime: operation.endTime,
-                  text: "",
                 },
               ],
             });
@@ -739,7 +951,63 @@ export default function Editor() {
   }, [programTime]);
 
   useEffect(() => {
-    setSelectedSegmentIds(new Set());
+    if (!resizeState) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const delta = event.clientX - resizeState.startX;
+
+      if (resizeState.edge === "left") {
+        const maxLeftWidth = Math.min(
+          LEFT_SIDEBAR_MAX_WIDTH,
+          Math.max(
+            LEFT_SIDEBAR_MIN_WIDTH,
+            resizeState.containerWidth -
+              resizeState.startRightWidth -
+              RESIZE_HANDLE_WIDTH * 2 -
+              CENTER_PANEL_MIN_WIDTH
+          )
+        );
+
+        setLeftSidebarWidth(clamp(resizeState.startLeftWidth + delta, LEFT_SIDEBAR_MIN_WIDTH, maxLeftWidth));
+        return;
+      }
+
+      const maxRightWidth = Math.min(
+        RIGHT_SIDEBAR_MAX_WIDTH,
+        Math.max(
+          RIGHT_SIDEBAR_MIN_WIDTH,
+          resizeState.containerWidth -
+            resizeState.startLeftWidth -
+            RESIZE_HANDLE_WIDTH * 2 -
+            CENTER_PANEL_MIN_WIDTH
+        )
+      );
+
+      setRightSidebarWidth(clamp(resizeState.startRightWidth - delta, RIGHT_SIDEBAR_MIN_WIDTH, maxRightWidth));
+    };
+
+    const handlePointerUp = () => {
+      setResizeState(null);
+    };
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [resizeState]);
+
+  useEffect(() => {
+    setSelectedWordIds(new Set());
   }, [transcriptSourceClipId]);
 
   useEffect(() => {
@@ -845,12 +1113,31 @@ export default function Editor() {
         </div>
       </header>
 
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[260px_minmax(0,1fr)_320px] overflow-hidden 2xl:grid-cols-[280px_minmax(0,1fr)_340px]">
+      <div
+        ref={editorColumnsRef}
+        className={`grid min-h-0 min-w-0 flex-1 overflow-hidden ${resizeState ? "select-none" : ""}`}
+        style={{
+          gridTemplateColumns: `${leftSidebarWidth}px ${RESIZE_HANDLE_WIDTH}px minmax(0,1fr) ${RESIZE_HANDLE_WIDTH}px ${rightSidebarWidth}px`,
+        }}
+      >
         <MediaBin
           clips={libraryClips}
           selectedClipId={selectedSourceClipId}
           onSelectClip={handleSelectSourceClip}
           onAddFiles={handleAddFiles}
+          searchDraft={searchDraft}
+          activeSearchQuery={activeSearchQuery}
+          searchScores={clipSearchScores}
+          isSearching={isSearching}
+          onSearchDraftChange={setSearchDraft}
+          onSearchSubmit={handleSearchSubmit}
+          onClearSearch={handleClearSearch}
+        />
+
+        <SidebarResizeHandle
+          edge="left"
+          isActive={resizeState?.edge === "left"}
+          onPointerDown={handleResizeStart}
         />
 
         <main className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_320px] overflow-hidden bg-[#0d0e12]">
@@ -912,7 +1199,13 @@ export default function Editor() {
           </section>
         </main>
 
-        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-white/8 bg-[#141518]">
+        <SidebarResizeHandle
+          edge="right"
+          isActive={resizeState?.edge === "right"}
+          onPointerDown={handleResizeStart}
+        />
+
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#141518]">
           <div className="border-b border-white/8 px-4 py-3">
             <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Dock</p>
             <div className="mt-3 grid grid-cols-3 rounded-xl border border-white/8 bg-white/[0.03] p-1">
@@ -925,7 +1218,8 @@ export default function Editor() {
                   key={tab.id}
                   type="button"
                   onClick={() => setDockTab(tab.id)}
-                  className={`rounded-lg px-2 py-2 text-[11px] font-medium uppercase tracking-[0.16em] transition ${
+                  title={tab.label}
+                  className={`min-w-0 truncate rounded-lg px-1.5 py-2 text-[10px] font-medium uppercase tracking-[0.12em] transition ${
                     dockTab === tab.id
                       ? "bg-sky-400 text-black"
                       : "text-white/42 hover:text-white/78"
@@ -961,15 +1255,17 @@ export default function Editor() {
               <TranscriptPanel
                 clipName={transcriptClip?.fileName}
                 segments={transcriptClip?.transcriptSegments || []}
+                pauses={transcriptPauses}
                 currentTime={activeTranscriptTime}
-                selectedIds={selectedSegmentIds}
+                selectedWordIds={selectedWordIds}
                 activeRange={selectedTranscriptRange}
                 onSeek={handleTranscriptSeek}
-                onToggleSelect={handleToggleSegment}
-                onRemoveSelected={handleRemoveSelected}
-                onSearch={handleSearch}
+                onWordSelectionChange={handleWordSelectionChange}
+                onRemoveSelectedWords={handleRemoveSelectedWords}
+                onRemovePause={handleRemovePause}
+                onRemoveLongPauses={handleRemoveLongPauses}
+                activeSearchQuery={activeSearchQuery}
                 searchResults={searchResults}
-                isSearching={isSearching}
               />
             )}
 

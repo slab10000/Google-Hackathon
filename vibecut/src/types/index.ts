@@ -2,13 +2,32 @@ export type ClipProcessingStatus = "queued" | "processing" | "ready" | "error";
 export type MonitorMode = "source" | "program";
 export type DockTab = "ai" | "transcript" | "inspector";
 
+export interface TranscriptWord {
+  id: string;
+  sourceClipId: string;
+  segmentId: string;
+  text: string;
+  startTime: number;
+  endTime: number;
+  confidence?: number;
+}
+
 export interface TranscriptSegment {
   id: string;
   sourceClipId: string;
   startTime: number;
   endTime: number;
   text: string;
+  words: TranscriptWord[];
   embedding?: number[];
+}
+
+export interface PauseRange {
+  id: string;
+  sourceClipId: string;
+  startTime: number;
+  endTime: number;
+  duration: number;
 }
 
 export interface LibraryClip {
@@ -19,6 +38,7 @@ export interface LibraryClip {
   duration: number;
   status: ClipProcessingStatus;
   transcriptSegments: TranscriptSegment[];
+  pauseRanges: PauseRange[];
   embeddingsReady: boolean;
   waveform: number[];
   error?: string;
@@ -40,9 +60,17 @@ export interface TimelineState {
   totalDuration: number;
 }
 
+export interface TimelineRange {
+  sourceClipId: string;
+  startTime: number;
+  endTime: number;
+  label?: string;
+}
+
 export type TimelineAction =
   | { type: "ADD_SOURCE_CLIP"; sourceClipId: string; duration: number; label?: string }
   | { type: "REMOVE_SEGMENTS"; segments: TranscriptSegment[] }
+  | { type: "REMOVE_RANGES"; ranges: TimelineRange[] }
   | { type: "INSERT_IMAGE"; afterClipId: string | null; imageSrc: string; duration: number; label?: string }
   | { type: "APPLY_EDIT"; clips: TimelineClip[] }
   | { type: "SPLIT_CLIP"; clipId: string; splitTime: number }

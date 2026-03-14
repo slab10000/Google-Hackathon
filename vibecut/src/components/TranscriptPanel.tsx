@@ -1,19 +1,21 @@
 "use client";
-import { useMemo, useState } from "react";
-import { TranscriptSegment } from "@/types";
+import { useCallback, useMemo } from "react";
+import { PauseRange, TranscriptSegment } from "@/types";
 
 interface TranscriptPanelProps {
   clipName?: string;
   segments: TranscriptSegment[];
+  pauses: PauseRange[];
   currentTime: number;
-  selectedIds: Set<string>;
+  selectedWordIds: Set<string>;
   activeRange?: { startTime: number; endTime: number } | null;
   onSeek: (time: number) => void;
-  onToggleSelect: (id: string) => void;
-  onRemoveSelected: () => void;
-  onSearch: (query: string) => void;
+  onWordSelectionChange: (wordIds: string[]) => void;
+  onRemoveSelectedWords: () => void;
+  onRemovePause: (pauseId: string) => void;
+  onRemoveLongPauses: (minimumDuration?: number) => void;
+  activeSearchQuery?: string;
   searchResults: { id: string; score: number }[] | null;
-  isSearching: boolean;
 }
 
 function formatTime(seconds: number) {
@@ -25,18 +27,18 @@ function formatTime(seconds: number) {
 export default function TranscriptPanel({
   clipName,
   segments,
+  pauses,
   currentTime,
-  selectedIds,
+  selectedWordIds,
   activeRange,
   onSeek,
-  onToggleSelect,
-  onRemoveSelected,
-  onSearch,
+  onWordSelectionChange,
+  onRemoveSelectedWords,
+  onRemovePause,
+  onRemoveLongPauses,
+  activeSearchQuery,
   searchResults,
-  isSearching,
 }: TranscriptPanelProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-
   const activeSegmentId = useMemo(() => {
     const active = segments.find((segment) => currentTime >= segment.startTime && currentTime < segment.endTime);
     return active?.id || null;
@@ -49,9 +51,15 @@ export default function TranscriptPanel({
     return map;
   }, [searchResults]);
 
-  const handleSearch = () => {
-    if (searchQuery.trim()) onSearch(searchQuery.trim());
-  };
+  const toggleWord = useCallback(
+    (wordId: string) => {
+      const next = new Set(selectedWordIds);
+      if (next.has(wordId)) next.delete(wordId);
+      else next.add(wordId);
+      onWordSelectionChange(Array.from(next));
+    },
+    [onWordSelectionChange, selectedWordIds]
+  );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
@@ -60,47 +68,71 @@ export default function TranscriptPanel({
         <p className="mt-1 truncate text-sm text-white/82">{clipName || "Select a clip"}</p>
       </div>
 
+      {activeSearchQuery && (
+        <div className="border-b border-white/8 px-4 py-3">
+          <p className="text-[10px] uppercase tracking-[0.2em] text-white/28">Search Context</p>
+          <p className="mt-1 text-xs leading-5 text-white/58">
+            Showing semantic matches for &quot;{activeSearchQuery}&quot;. Matching sections are highlighted below.
+          </p>
+        </div>
+      )}
+
       <div className="border-b border-white/8 px-4 py-3">
-        <div className="flex min-w-0 gap-2">
-          <input
-            type="text"
-            placeholder="Search clips by meaning..."
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && handleSearch()}
-            className="flex-1 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-sm text-white placeholder:text-white/26 focus:border-sky-400/40 focus:outline-none"
-          />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/30">Word Selection</p>
+            <p className="mt-1 text-xs leading-5 text-white/46">
+              Click words to mark precise removals, or jump by segment timestamps.
+            </p>
+          </div>
           <button
-            onClick={handleSearch}
-            disabled={isSearching || !searchQuery.trim()}
-            className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-medium text-white/82 transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={onRemoveSelectedWords}
+            disabled={selectedWordIds.size === 0}
+            className="rounded-md border border-red-400/20 bg-red-500/10 px-2.5 py-1.5 text-[11px] font-medium text-red-200 transition hover:bg-red-500/16 disabled:cursor-not-allowed disabled:opacity-35"
           >
-            {isSearching ? "..." : "Search"}
+            Remove {selectedWordIds.size || ""} {selectedWordIds.size === 1 ? "word" : "words"}
           </button>
         </div>
       </div>
 
-      {selectedIds.size > 0 && (
-        <div className="flex items-center justify-between border-b border-white/8 px-4 py-2.5">
-          <span className="text-[11px] text-white/42">{selectedIds.size} segments selected</span>
-          <button
-            onClick={onRemoveSelected}
-            className="rounded-md border border-red-400/20 bg-red-500/10 px-2.5 py-1.5 text-[11px] font-medium text-red-200 transition hover:bg-red-500/16"
-          >
-            Remove From Sequence
-          </button>
+      {pauses.length > 0 && (
+        <div className="border-b border-white/8 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-white/30">Pause Cleanup</p>
+              <p className="mt-1 text-xs leading-5 text-white/46">
+                Trim dead air with room tone preserved at the edges.
+              </p>
+            </div>
+            <button
+              onClick={() => onRemoveLongPauses()}
+              className="rounded-md border border-amber-400/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-medium text-amber-200 transition hover:bg-amber-500/16"
+            >
+              Remove Long Pauses
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {pauses.slice(0, 10).map((pause) => (
+              <button
+                key={pause.id}
+                onClick={() => onRemovePause(pause.id)}
+                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] uppercase tracking-[0.16em] text-white/60 transition hover:bg-white/[0.08] hover:text-white/82"
+              >
+                {formatTime(pause.startTime)} - {formatTime(pause.endTime)}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {segments.length === 0 ? (
           <div className="px-4 py-8 text-sm leading-6 text-white/36">
-            Select a processed clip to view its transcript and search results.
+            Select a processed clip to inspect its transcript, search hits, and pauses.
           </div>
         ) : (
           segments.map((segment) => {
             const isActive = segment.id === activeSegmentId;
-            const isSelected = selectedIds.has(segment.id);
             const searchScore = searchScoreMap?.get(segment.id);
             const isHighlighted = searchScore !== undefined && searchScore > 0.5;
             const inSelectedRange =
@@ -111,27 +143,18 @@ export default function TranscriptPanel({
             return (
               <div
                 key={segment.id}
-                className={`flex gap-3 border-b border-white/[0.05] px-4 py-3 transition ${
+                className={`border-b border-white/[0.05] px-4 py-3 transition ${
                   isActive
                     ? "bg-sky-400/10"
                     : inSelectedRange
                     ? "bg-white/[0.035]"
                     : isHighlighted
                     ? "bg-amber-400/8"
-                    : isSelected
-                    ? "bg-red-400/8"
                     : "hover:bg-white/[0.03]"
                 }`}
               >
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => onToggleSelect(segment.id)}
-                  className="mt-1 shrink-0 accent-sky-400"
-                />
-
-                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSeek(segment.startTime)}>
-                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-white/28">
+                <button type="button" className="min-w-0 text-left" onClick={() => onSeek(segment.startTime)}>
+                  <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-white/28">
                     <span>
                       {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
                     </span>
@@ -146,8 +169,31 @@ export default function TranscriptPanel({
                       </span>
                     )}
                   </div>
-                  <p className="mt-1 text-sm leading-6 text-white/78">{segment.text}</p>
                 </button>
+
+                {segment.words.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {segment.words.map((word) => {
+                      const isSelected = selectedWordIds.has(word.id);
+                      return (
+                        <button
+                          key={word.id}
+                          type="button"
+                          onClick={() => toggleWord(word.id)}
+                          className={`rounded-md px-2 py-1 text-sm leading-5 transition ${
+                            isSelected
+                              ? "bg-red-500/18 text-red-100"
+                              : "bg-white/[0.04] text-white/72 hover:bg-white/[0.08]"
+                          }`}
+                        >
+                          {word.text}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm leading-6 text-white/78">{segment.text}</p>
+                )}
               </div>
             );
           })

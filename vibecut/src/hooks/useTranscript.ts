@@ -1,6 +1,6 @@
 "use client";
 import { useState, useCallback } from "react";
-import { TranscriptSegment } from "@/types";
+import { PauseRange, TranscriptSegment, TranscriptWord } from "@/types";
 
 export function useTranscript() {
   const [activeJobs, setActiveJobs] = useState(0);
@@ -11,12 +11,13 @@ export function useTranscript() {
     setError(null);
 
     try {
-      const formData = new FormData();
-      formData.append("video", file);
-
       const res = await fetch("/api/transcribe", {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          "X-Video-Filename": encodeURIComponent(file.name),
+        },
+        body: file,
       });
 
       if (!res.ok) {
@@ -25,10 +26,25 @@ export function useTranscript() {
       }
 
       const data = await res.json();
-      return (data.segments as Omit<TranscriptSegment, "sourceClipId">[]).map((segment) => ({
+      const segments = (data.segments as Array<
+        Omit<TranscriptSegment, "sourceClipId" | "words"> & {
+          words: Omit<TranscriptWord, "sourceClipId">[];
+        }
+      >).map((segment) => ({
         ...segment,
         sourceClipId,
+        words: segment.words.map((word) => ({
+          ...word,
+          sourceClipId,
+        })),
       }));
+
+      const pauses = (data.pauses as Omit<PauseRange, "sourceClipId">[] | undefined)?.map((pause) => ({
+        ...pause,
+        sourceClipId,
+      })) || [];
+
+      return { segments, pauses };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Transcription failed";
       setError(msg);
