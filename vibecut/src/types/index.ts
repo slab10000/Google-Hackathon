@@ -1,6 +1,6 @@
 export type ClipProcessingStatus = "queued" | "processing" | "ready" | "error";
 export type MonitorMode = "source" | "program";
-export type DockTab = "ai" | "transcript" | "inspector";
+export type DockTab = "ai" | "transcript" | "inspector" | "font";
 
 export interface TranscriptWord {
   id: string;

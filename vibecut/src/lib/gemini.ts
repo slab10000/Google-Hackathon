@@ -17,4 +17,5 @@ export const MODELS = {
   REASONING: "gemini-3.1-pro-preview",
   EMBEDDING: "gemini-embedding-2-preview",
   IMAGE_GEN: "gemini-3.1-flash-image-preview",
+  VIDEO_GEN: "veo-2.0-generate-001",
 } as const;

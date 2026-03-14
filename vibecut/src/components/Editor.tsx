@@ -18,7 +18,8 @@ import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
 import TranscriptPanel from "./TranscriptPanel";
 import CommandInput from "./CommandInput";
-import ImageGenPanel from "./ImageGenPanel";
+import AssetGenPanel from "./AssetGenPanel";
+import VibeFontPanel, { FontOverlayData } from "./VibeFontPanel";
 import { v4 as uuid } from "uuid";
 
 type SearchHit = { id: string; sourceClipId: string; score: number };
@@ -222,6 +223,10 @@ export default function Editor() {
   const [programTime, setProgramTime] = useState(0);
   const [sourceTime, setSourceTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [activeFontOverlay, setActiveFontOverlay] = useState<FontOverlayData | null>(null);
+
+  const [timelineHeight, setTimelineHeight] = useState(320);
+  const dragRef = useRef<{ isDragging: boolean; startY: number; startHeight: number }>({ isDragging: false, startY: 0, startHeight: 0 });
 
   const { timeline, dispatch } = useTimeline();
   const { activeJobs, error: transcriptError, transcribe, embedTexts } = useTranscript();
@@ -1083,6 +1088,28 @@ export default function Editor() {
     };
   }, []);
 
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragRef.current.isDragging) return;
+      const delta = e.clientY - dragRef.current.startY;
+      setTimelineHeight(Math.max(150, dragRef.current.startHeight - delta));
+    };
+
+    const handleMouseUp = () => {
+      if (dragRef.current.isDragging) {
+        dragRef.current.isDragging = false;
+        document.body.style.cursor = 'default';
+      }
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-[#0b0c0f] text-white">
       <header className="flex items-center justify-between border-b border-white/8 bg-[#111215] px-5 py-3">
@@ -1140,9 +1167,9 @@ export default function Editor() {
           onPointerDown={handleResizeStart}
         />
 
-        <main className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_320px] overflow-hidden bg-[#0d0e12]">
-          <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-4">
-            <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#0d0e12]">
+          <section className="flex min-h-[250px] flex-1 flex-col overflow-hidden p-4">
+            <div className="mb-3 flex shrink-0 min-w-0 items-center justify-between gap-3">
               <div className="inline-flex rounded-xl border border-white/8 bg-[#131419] p-1">
                 {(["source", "program"] as MonitorMode[]).map((mode) => (
                   <button
@@ -1181,10 +1208,29 @@ export default function Editor() {
               emptyLabel={monitorMode === "source" ? "Select a clip from the media bin" : "Build a sequence to preview it"}
               onTogglePlay={handleTogglePlay}
               onSeek={handleMonitorSeek}
+              fontOverlay={activeFontOverlay}
             />
           </section>
 
-          <section className="min-h-0 min-w-0 overflow-hidden p-4 pt-0">
+          <div
+            className="group relative z-10 flex h-3 w-full cursor-row-resize items-center justify-center -my-1.5 hover:bg-white/5 transition"
+            onMouseDown={(e: React.MouseEvent) => {
+              e.preventDefault();
+              dragRef.current = {
+                isDragging: true,
+                startY: e.clientY,
+                startHeight: timelineHeight,
+              };
+              document.body.style.cursor = 'row-resize';
+            }}
+          >
+            <div className="h-[2px] w-12 rounded-full bg-white/20 transition group-hover:bg-sky-400/80" />
+          </div>
+
+          <section 
+            style={{ flexBasis: `${timelineHeight}px` }}
+            className="min-h-[150px] shrink overflow-hidden p-4 pt-1"
+          >
             <Timeline
               clips={timeline.clips}
               libraryClips={libraryClips}
@@ -1212,6 +1258,7 @@ export default function Editor() {
               {([
                 { id: "ai", label: "AI Edit" },
                 { id: "transcript", label: "Transcript" },
+                { id: "font", label: "Font" },
                 { id: "inspector", label: "Inspector" },
               ] as { id: DockTab; label: string }[]).map((tab) => (
                 <button
@@ -1246,7 +1293,7 @@ export default function Editor() {
                     isProcessing={isEditProcessing}
                     lastExplanation={lastExplanation}
                   />
-                  <ImageGenPanel onInsertImage={handleInsertImage} />
+                  <AssetGenPanel onInsertImage={handleInsertImage} onAddFiles={handleAddFiles} />
                 </div>
               </div>
             )}
@@ -1266,6 +1313,17 @@ export default function Editor() {
                 onRemoveLongPauses={handleRemoveLongPauses}
                 activeSearchQuery={activeSearchQuery}
                 searchResults={searchResults}
+              />
+            )}
+
+            {dockTab === "font" && (
+              <VibeFontPanel
+                videoRef={videoRef}
+                onApplyFont={(overlay) => {
+                  setActiveFontOverlay(overlay);
+                  setMonitorMode("program");
+                }}
+                onAddFiles={handleAddFiles}
               />
             )}
 
