@@ -174,32 +174,19 @@ async function detectPauseRanges(audioPath: string) {
   return pauses;
 }
 
-async function hasAudioStream(filePath: string): Promise<boolean> {
+async function getMediaStreams(inputPath: string): Promise<ProbeResult> {
   try {
     const { stdout } = await execFileAsync("ffprobe", [
       "-v", "error",
-      "-show_entries", "stream=codec_type",
-      "-of", "csv=p=0",
-      filePath
+      "-print_format", "json",
+      "-show_streams",
+      inputPath,
     ]);
-    return stdout.split("\n").some(line => line.trim() === "audio");
+    return JSON.parse(stdout) as ProbeResult;
   } catch (error) {
-    console.warn("ffprobe check failed, assuming no audio", error);
-    return false;
+    console.warn("ffprobe failed or not found", error);
+    return { streams: [] };
   }
-}
-
-async function getMediaStreams(inputPath: string) {
-  const { stdout } = await execFileAsync("ffprobe", [
-    "-v",
-    "error",
-    "-print_format",
-    "json",
-    "-show_streams",
-    inputPath,
-  ]);
-
-  return JSON.parse(stdout) as ProbeResult;
 }
 
 async function extractAudioFromVideoFile(videoFile: File) {
@@ -212,8 +199,11 @@ async function extractAudioFromVideoFile(videoFile: File) {
     const buffer = Buffer.from(await videoFile.arrayBuffer());
     await writeFile(inputPath, buffer);
 
-    const audioExists = await hasAudioStream(inputPath);
-    if (!audioExists) {
+    const probe = await getMediaStreams(inputPath);
+    const hasAudioStream = (probe.streams || []).some((stream) => stream.codec_type === "audio");
+
+    if (!hasAudioStream) {
+      // Return null data for silent videos instead of throwing
       return {
         audioBase64: null,
         mimeType: null,
@@ -222,27 +212,13 @@ async function extractAudioFromVideoFile(videoFile: File) {
       };
     }
 
-    const probe = await getMediaStreams(inputPath);
-    const hasAudioStream = (probe.streams || []).some((stream) => stream.codec_type === "audio");
-
-    if (!hasAudioStream) {
-      throw new Error("This video does not contain an audio track, so there is nothing to transcribe.");
-    }
-
     await execFileAsync("ffmpeg", [
-      "-i",
-      inputPath,
-      "-map",
-      "0:a:0",
+      "-i", inputPath,
       "-vn",
-      "-acodec",
-      "libmp3lame",
-      "-ar",
-      "16000",
-      "-ac",
-      "1",
-      "-b:a",
-      "64k",
+      "-acodec", "libmp3lame",
+      "-ar", "16000",
+      "-ac", "1",
+      "-b:a", "64k",
       "-y",
       outputPath,
     ]);
@@ -256,14 +232,8 @@ async function extractAudioFromVideoFile(videoFile: File) {
     };
   } catch (error) {
     await rm(tempDir, { recursive: true, force: true });
-    const rawMessage =
-      error instanceof Error
-        ? error.message
-        : "ffmpeg failed to extract audio from the uploaded video";
-    const message = rawMessage.includes("does not contain an audio track")
-      ? rawMessage
-      : "Unable to extract audio from this video. Try a clip with a standard audio track or re-export the file.";
-    throw new Error(`Audio extraction failed: ${message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Audio extraction process failed: ${message}`);
   }
 }
 
@@ -317,6 +287,7 @@ export async function POST(req: Request) {
     const { audioBase64, mimeType, audioPath, cleanupPath: payloadCleanupPath } = await getAudioPayload(req);
     cleanupPath = payloadCleanupPath;
 
+    // Gracefully handle silent videos
     if (!audioBase64) {
       return NextResponse.json({ segments: [], pauses: [] });
     }
