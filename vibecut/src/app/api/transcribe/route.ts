@@ -48,6 +48,14 @@ type NormalizedSegment = {
   words: NormalizedWord[];
 };
 
+type ProbeStream = {
+  codec_type?: string;
+};
+
+type ProbeResult = {
+  streams?: ProbeStream[];
+};
+
 function normalizeSeconds(value: unknown, fallback: number) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -166,6 +174,19 @@ async function detectPauseRanges(audioPath: string) {
   return pauses;
 }
 
+async function getMediaStreams(inputPath: string) {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v",
+    "error",
+    "-print_format",
+    "json",
+    "-show_streams",
+    inputPath,
+  ]);
+
+  return JSON.parse(stdout) as ProbeResult;
+}
+
 async function extractAudioFromVideoFile(videoFile: File) {
   const tempDir = await mkdtemp(join(tmpdir(), "vibecut-"));
   const inputExt = extname(videoFile.name) || ".mp4";
@@ -176,9 +197,18 @@ async function extractAudioFromVideoFile(videoFile: File) {
     const buffer = Buffer.from(await videoFile.arrayBuffer());
     await writeFile(inputPath, buffer);
 
+    const probe = await getMediaStreams(inputPath);
+    const hasAudioStream = (probe.streams || []).some((stream) => stream.codec_type === "audio");
+
+    if (!hasAudioStream) {
+      throw new Error("This video does not contain an audio track, so there is nothing to transcribe.");
+    }
+
     await execFileAsync("ffmpeg", [
       "-i",
       inputPath,
+      "-map",
+      "0:a:0",
       "-vn",
       "-acodec",
       "libmp3lame",
@@ -201,10 +231,13 @@ async function extractAudioFromVideoFile(videoFile: File) {
     };
   } catch (error) {
     await rm(tempDir, { recursive: true, force: true });
-    const message =
+    const rawMessage =
       error instanceof Error
         ? error.message
         : "ffmpeg failed to extract audio from the uploaded video";
+    const message = rawMessage.includes("does not contain an audio track")
+      ? rawMessage
+      : "Unable to extract audio from this video. Try a clip with a standard audio track or re-export the file.";
     throw new Error(`Audio extraction failed: ${message}`);
   }
 }
