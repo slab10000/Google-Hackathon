@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useRef, useState, useCallback } from "react";
+import { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { LibraryClip, TimelineAction, TimelineClip } from "@/types";
 
 interface TimelineProps {
@@ -48,6 +48,7 @@ export default function Timeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [isDropTarget, setIsDropTarget] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
   const [dragState, setDragState] = useState<{
     type: "move" | "trim-start" | "trim-end";
     clipId: string;
@@ -94,6 +95,21 @@ export default function Timeline({
     [timelineWidth, totalDuration]
   );
 
+  const scrubToPosition = useCallback(
+    (clientX: number) => {
+      onSeek(getTimeFromX(clientX));
+    },
+    [getTimeFromX, onSeek]
+  );
+
+  const startScrubbing = useCallback(
+    (clientX: number) => {
+      setIsScrubbing(true);
+      scrubToPosition(clientX);
+    },
+    [scrubToPosition]
+  );
+
   const handleMouseMove = useCallback(
     (event: React.MouseEvent) => {
       if (!dragState) return;
@@ -129,6 +145,26 @@ export default function Timeline({
   const handleMouseUp = useCallback(() => {
     setDragState(null);
   }, []);
+
+  useEffect(() => {
+    if (!isScrubbing) return;
+
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      scrubToPosition(event.clientX);
+    };
+
+    const handleWindowMouseUp = () => {
+      setIsScrubbing(false);
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+  }, [isScrubbing, scrubToPosition]);
 
   const handleSplit = useCallback(() => {
     if (!selectedClipId) return;
@@ -208,9 +244,10 @@ export default function Timeline({
           className={`relative min-h-0 min-w-0 flex-1 overflow-auto ${
             isDropTarget ? "bg-sky-400/[0.03]" : "bg-[#15171b]"
           }`}
-          onClick={(event) => {
+          onMouseDown={(event) => {
+            if (event.button !== 0) return;
             if ((event.target as HTMLElement).closest("[data-clip]")) return;
-            onSeek(getTimeFromX(event.clientX));
+            startScrubbing(event.clientX);
           }}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -367,12 +404,21 @@ export default function Timeline({
               </div>
             )}
 
-            <div
-              className="pointer-events-none absolute inset-y-0 z-10 w-px bg-sky-400"
+            <button
+              type="button"
+              aria-label="Drag playhead"
+              className="absolute inset-y-0 z-20 w-5 -translate-x-1/2 cursor-ew-resize bg-transparent"
               style={{ left: playheadX }}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.button !== 0) return;
+                startScrubbing(event.clientX);
+              }}
             >
-              <div className="absolute left-1/2 top-2 h-3 w-3 -translate-x-1/2 rotate-45 bg-sky-400" />
-            </div>
+              <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sky-400" />
+              <span className="pointer-events-none absolute left-1/2 top-2 h-3 w-3 -translate-x-1/2 rotate-45 bg-sky-400" />
+            </button>
           </div>
         </div>
       </div>
