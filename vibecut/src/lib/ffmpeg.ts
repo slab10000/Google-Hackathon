@@ -1,8 +1,8 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { toBlobURL } from "@ffmpeg/util";
 
 let ffmpeg: FFmpeg | null = null;
 let loadPromise: Promise<FFmpeg> | null = null;
+const FFMPEG_BASE_PATH = "/ffmpeg";
 
 export async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpeg && ffmpeg.loaded) return ffmpeg;
@@ -10,11 +10,18 @@ export async function getFFmpeg(): Promise<FFmpeg> {
 
   loadPromise = (async () => {
     const instance = new FFmpeg();
-    const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
-    await instance.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-    });
+    try {
+      await instance.load({
+        // Serve ffmpeg core assets from the app so the module worker can import
+        // them directly without the blob: URL resolution issue in Next/Turbopack.
+        coreURL: `${FFMPEG_BASE_PATH}/ffmpeg-core.js`,
+        wasmURL: `${FFMPEG_BASE_PATH}/ffmpeg-core.wasm`,
+      });
+    } catch (err) {
+      // Reset so it can be retried
+      loadPromise = null;
+      throw new Error(`Failed to load ffmpeg.wasm: ${err instanceof Error ? err.message : err}`);
+    }
     ffmpeg = instance;
     return instance;
   })();

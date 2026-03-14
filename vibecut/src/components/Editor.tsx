@@ -4,7 +4,6 @@ import { TranscriptSegment, EditCommandResponse } from "@/types";
 import { rankByRelevance } from "@/lib/embeddings";
 import { useVideoPlayer } from "@/hooks/useVideoPlayer";
 import { useTimeline } from "@/hooks/useTimeline";
-import { useFFmpeg } from "@/hooks/useFFmpeg";
 import { useTranscript } from "@/hooks/useTranscript";
 import VideoUpload from "./VideoUpload";
 import VideoPlayer from "./VideoPlayer";
@@ -32,7 +31,6 @@ export default function Editor() {
 
   const { videoRef, currentTime, duration, isPlaying, seek, togglePlay } = useVideoPlayer();
   const { timeline, dispatch } = useTimeline();
-  const { isLoading: ffmpegLoading, progress: ffmpegProgress, extractAudioFromVideo } = useFFmpeg();
   const { segments, isTranscribing, transcribe, updateEmbeddings } = useTranscript();
 
   // Calculate playhead position mapped to timeline
@@ -65,15 +63,11 @@ export default function Editor() {
       setStage("processing");
 
       try {
-        // Step 1: Extract audio
-        setProcessingStatus("Loading video processor...");
-        const audioBlob = await extractAudioFromVideo(file);
+        // Step 1: Upload + transcribe on the server
+        setProcessingStatus("Uploading video and transcribing audio...");
+        const segs = await transcribe(file);
 
-        // Step 2: Transcribe
-        setProcessingStatus("Transcribing audio...");
-        const segs = await transcribe(audioBlob);
-
-        // Step 3: Set up timeline
+        // Step 2: Set up timeline
         // We need to wait for video metadata to get duration
         const tempVideo = document.createElement("video");
         tempVideo.src = url;
@@ -86,7 +80,7 @@ export default function Editor() {
 
         setStage("editing");
 
-        // Step 4: Compute embeddings (in background)
+        // Step 3: Compute embeddings (in background)
         setProcessingStatus("Computing semantic embeddings...");
         if (segs && segs.length > 0) {
           try {
@@ -110,7 +104,7 @@ export default function Editor() {
         setProcessingStatus(`Error: ${err instanceof Error ? err.message : "Processing failed"}`);
       }
     },
-    [extractAudioFromVideo, transcribe, dispatch, updateEmbeddings]
+    [transcribe, dispatch, updateEmbeddings]
   );
 
   // Handle semantic search
@@ -333,14 +327,6 @@ export default function Editor() {
         <div className="w-80 space-y-4 text-center">
           <div className="w-12 h-12 border-3 border-violet-500/30 border-t-violet-500 rounded-full animate-spin mx-auto" />
           <p className="text-white/60 text-sm">{processingStatus}</p>
-          {ffmpegLoading && (
-            <div className="w-full bg-white/10 rounded-full h-2">
-              <div
-                className="bg-violet-500 h-2 rounded-full transition-all"
-                style={{ width: `${ffmpegProgress * 100}%` }}
-              />
-            </div>
-          )}
           {isTranscribing && (
             <p className="text-xs text-white/30">This may take a minute for longer videos</p>
           )}
