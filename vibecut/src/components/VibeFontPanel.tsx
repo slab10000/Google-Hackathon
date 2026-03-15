@@ -8,6 +8,7 @@ export interface FontOverlayData {
   color: string;
   textShadow: string;
   cssFilter?: string;
+  fontSize?: number;
 }
 
 interface VibeFontPanelProps {
@@ -25,11 +26,10 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
   
   // Video State
   const [step, setStep] = useState<Step>("input");
-  const [artDirection, setArtDirection] = useState("");
-  const [typographyPrompt, setTypographyPrompt] = useState("");
+  const [suggestions, setSuggestions] = useState<{ style: string; typography: string }[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [referenceFrame, setReferenceFrame] = useState<string | null>(null);
-  const [baseImage, setBaseImage] = useState<string | null>(null);
-  const [baseImageMimeType, setBaseImageMimeType] = useState<string>("");
+  const [baseImages, setBaseImages] = useState<{ data: string; mimeType: string }[]>([]);
   
   // Overlay State
   const [isGeneratingOverlay, setIsGeneratingOverlay] = useState(false);
@@ -118,6 +118,7 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
     setError(null);
 
     try {
+      console.log(`[VibeFontPanel] Starting style generation for: "${text}"`);
       const res = await fetch("/api/vibe-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -126,14 +127,15 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || "Failed to generate style");
+        throw new Error(data.error || "Failed to generate style suggestions");
       }
 
-      const { style, typography } = await res.json();
-      setArtDirection(style);
-      setTypographyPrompt(typography);
+      const { suggestions: rawSuggestions } = await res.json();
+      console.log(`[VibeFontPanel] Received ${rawSuggestions.length} suggestions.`);
+      setSuggestions(rawSuggestions);
       setStep("style-review");
     } catch (err) {
+      console.error("[VibeFontPanel] Style generation catch error:", err);
       setError(err instanceof Error ? err.message : "Style generation failed");
       setStep("input");
     }
@@ -144,29 +146,33 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
     setError(null);
 
     try {
-      const res = await fetch("/api/vibe-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          action: "image", 
-          text, 
-          style: artDirection,
-          typographyPrompt: typographyPrompt,
-          referenceImage: referenceFrame
-        }),
-      });
+      console.log(`[VibeFontPanel] Generating ${suggestions.length} test images in parallel...`);
+      const imagePromises = suggestions.map(s => 
+        fetch("/api/vibe-text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            action: "image", 
+            text, 
+            style: s.style,
+            typographyPrompt: s.typography,
+            referenceImage: referenceFrame
+          }),
+        }).then(async r => {
+          if (!r.ok) {
+            const d = await r.json();
+            throw new Error(d.error || "Image generation failed");
+          }
+          return r.json();
+        })
+      );
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to generate base image");
-      }
-
-      const { data, mimeType } = await res.json();
-      setBaseImage(`data:${mimeType};base64,${data}`);
-      setBaseImageMimeType(mimeType);
+      const results = await Promise.all(imagePromises);
+      setBaseImages(results.map(r => ({ data: `data:${r.mimeType};base64,${r.data}`, mimeType: r.mimeType })));
       setStep("image-review");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Image generation failed");
+      console.error("[VibeFontPanel] Parallel image generation failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to generate preview images");
       setStep("style-review");
     }
   };
@@ -175,41 +181,55 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
     setStep("generating-video");
     setError(null);
 
+    if (selectedIndex === null || !suggestions[selectedIndex] || !baseImages[selectedIndex]) return;
+    const selectedSuggestion = suggestions[selectedIndex];
+    const selectedImage = baseImages[selectedIndex];
+
     try {
+      console.log("[VibeFontPanel] Starting final video generation request...");
       const res = await fetch("/api/vibe-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           action: "video", 
           text, 
-          imageBase64: baseImage,
-          imageMimeType: baseImageMimeType,
-          style: artDirection
+          imageBase64: selectedImage.data,
+          imageMimeType: selectedImage.mimeType,
+          style: selectedSuggestion.style
         }),
       });
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || "Failed to request video");
+        throw new Error(data.error || "Failed to generate final video");
       }
 
       const { videoUri } = await res.json();
       
-      const finalRes = await fetch(videoUri);
-      const videoBlob = await finalRes.blob();
+      let videoBlob: Blob;
+      if (videoUri.startsWith("data:")) {
+        const [header, base64] = videoUri.split(",");
+        const mime = header.match(/:(.*?);/)?.[1] || "video/mp4";
+        const binary = atob(base64);
+        const array = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+        videoBlob = new Blob([array], { type: mime });
+      } else {
+        const finalRes = await fetch(videoUri);
+        videoBlob = await finalRes.blob();
+      }
+
       const filename = `cinematic_text_${Date.now()}.mp4`;
       const videoFile = new File([videoBlob], filename, { type: "video/mp4" });
       
-      if (onAddFiles) {
-        onAddFiles([videoFile]);
-      }
+      if (onAddFiles) onAddFiles([videoFile]);
       
       setStep("input");
-      setBaseImage(null);
-      setArtDirection("");
-      
+      setBaseImages([]);
+      setSuggestions([]);
+      setSelectedIndex(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Video generation logic failed");
+      setError(err instanceof Error ? err.message : "Video generation failed");
       setStep("image-review");
     }
   };
@@ -326,80 +346,108 @@ export default function VibeFontPanel({ videoRef, onAddFiles, onApplyFont }: Vib
 
             {step === "style-review" && (
               <div className="space-y-4">
-                 <div className="grid grid-cols-2 gap-4">
-                   <div>
-                      <p className="text-[10px] uppercase text-white/40 mb-1">Art Direction</p>
-                      <textarea
-                        value={artDirection}
-                        onChange={(e) => setArtDirection(e.target.value)}
-                        rows={3}
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white focus:outline-none resize-none"
-                      />
-                   </div>
-                   <div>
-                      <p className="text-[10px] uppercase text-white/40 mb-1">Typography Prompt</p>
-                      <textarea
-                        value={typographyPrompt}
-                        onChange={(e) => setTypographyPrompt(e.target.value)}
-                        rows={3}
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white focus:outline-none resize-none"
-                      />
-                   </div>
-                 </div>
-                 
-                 <div className="flex gap-2">
-                   <button 
-                     onClick={() => setStep("input")}
-                     className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/20"
-                   >
-                     Back
-                   </button>
-                   <button 
-                     onClick={handleGenerateImage}
-                     className="flex-1 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
-                   >
-                     Test Base Image
-                   </button>
-                 </div>
+                <p className="text-[10px] uppercase tracking-widest text-white/40">Choose AI Art Direction</p>
+                <div className="space-y-3">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setSelectedIndex(i === selectedIndex ? null : i)}
+                      className={`w-full text-left rounded-xl border p-3 transition-all ${
+                        selectedIndex === i 
+                          ? "border-sky-400 bg-sky-400/10" 
+                          : "border-white/10 bg-white/5 hover:bg-white/8"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-1 h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center ${selectedIndex === i ? "border-sky-400" : "border-white/20"}`}>
+                          {selectedIndex === i && <div className="h-2 w-2 rounded-full bg-sky-400" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold text-white/90">Option {i + 1}</p>
+                          <p className="mt-1 text-[11px] leading-relaxed text-white/60 line-clamp-2 italic">"{s.style}"</p>
+                          <p className="mt-1 text-[10px] text-white/40 truncate">Font: {s.typography}</p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                
+                <div className="flex gap-2 pt-2">
+                  <button 
+                    onClick={() => setStep("input")}
+                    className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20"
+                  >
+                    Back
+                  </button>
+                  <button 
+                    onClick={handleGenerateImage}
+                    disabled={selectedIndex === null}
+                    className="flex-1 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    Generate Previews
+                  </button>
+                </div>
               </div>
             )}
 
             {step === "generating-image" && (
-              <div className="py-8 text-center text-sm text-white/60 animate-pulse">
-                Compositing cinematic base plate...
+              <div className="py-8 text-center">
+                <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-emerald-500 mb-3" />
+                <p className="text-sm text-white/60">Compositing 3 cinematic base plates...</p>
               </div>
             )}
 
-            {step === "image-review" && baseImage && (
+            {step === "image-review" && (
               <div className="space-y-4">
-                 <div>
-                    <p className="text-[10px] uppercase text-white/40 mb-1">Base Target Image</p>
-                    <div className="aspect-video relative overflow-hidden rounded-lg bg-black/40">
-                      <Image src={baseImage} alt="Base text image" fill className="object-cover" unoptimized/>
-                    </div>
-                 </div>
-                 
-                 <div className="flex gap-2">
-                   <button 
-                     onClick={() => setStep("style-review")}
-                     className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/20"
-                   >
-                     Back
-                   </button>
-                   <button 
-                     onClick={handleGenerateVideo}
-                     className="flex-1 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500"
-                   >
-                     Generate Veo Transition
-                   </button>
-                 </div>
-                 {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
+                <p className="text-[10px] uppercase tracking-widest text-white/40">Select the best base frame</p>
+                <div className="grid grid-cols-1 gap-3">
+                  {baseImages.map((img, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setSelectedIndex(i)}
+                      className={`relative aspect-[16/9] overflow-hidden rounded-xl border-2 transition-all ${
+                        selectedIndex === i ? "border-amber-500 ring-2 ring-amber-500/50" : "border-white/10 opacity-70 hover:opacity-100"
+                      }`}
+                    >
+                      <Image src={img.data} alt={`Option ${i+1}`} fill className="object-cover" unoptimized />
+                      <div className="absolute inset-x-0 bottom-0 bg-black/60 p-2 backdrop-blur-sm">
+                        <p className="text-[10px] text-white/90 truncate italic">"{suggestions[i].style}"</p>
+                      </div>
+                      {selectedIndex === i && (
+                        <div className="absolute top-2 right-2 rounded-full bg-amber-500 p-1 shadow-lg">
+                          <svg className="h-3 w-3 text-black" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                          </svg>
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                
+                <div className="flex gap-2 pt-2">
+                  <button 
+                    onClick={() => setStep("style-review")}
+                    className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20"
+                  >
+                    Back
+                  </button>
+                  <button 
+                    onClick={handleGenerateVideo}
+                    disabled={selectedIndex === null}
+                    className="flex-1 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:opacity-50"
+                  >
+                    Animate with Veo
+                  </button>
+                </div>
+                {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
               </div>
             )}
 
             {step === "generating-video" && (
-               <div className="py-8 text-center text-sm text-amber-400 animate-pulse">
-                 Generating final video intro with Veo 3.1... (This takes a few minutes)
+               <div className="py-12 text-center">
+                 <div className="inline-block h-10 w-10 animate-spin rounded-full border-4 border-amber-500/20 border-t-amber-500 mb-4" />
+                 <p className="text-sm text-amber-500 font-medium">Synthesizing with Veo 3.1...</p>
+                 <p className="mt-2 text-[11px] text-white/40">This usually takes 2-3 minutes</p>
                </div>
             )}
           </div>

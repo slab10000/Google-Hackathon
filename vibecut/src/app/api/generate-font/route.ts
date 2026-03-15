@@ -6,12 +6,15 @@ export const maxDuration = 60;
 export async function POST(req: Request) {
   try {
     const { imageBase64 } = await req.json();
+    console.log("[GenerateFont] Received request. Image included:", !!imageBase64);
 
     if (!imageBase64) {
+      console.error("[GenerateFont] No image provided");
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
     }
 
     const ai = getGeminiClient();
+    console.log("[GenerateFont] Requesting font analysis from Gemini...");
     
     const prompt = `
 Analyze this video frame and generate a highly thematic typography style perfectly suited to its visual vibe, aesthetic, texture, and content.
@@ -61,6 +64,7 @@ Provide the response strictly as a JSON object with the following keys:
     const textShadow = data.textShadow || "0px 0px 8px rgba(0,0,0,0.8)";
     const cssFilter = data.cssFilter || "none";
 
+    console.log("[GenerateFont] Font generation successful:", { fontFamily, color });
     return NextResponse.json({ fontFamily, color, textShadow, cssFilter });
   } catch (error) {
     console.error("Font generation error:", error);

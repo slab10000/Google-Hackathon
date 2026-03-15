@@ -20,6 +20,8 @@ import TranscriptPanel from "./TranscriptPanel";
 import CommandInput from "./CommandInput";
 import AssetGenPanel from "./AssetGenPanel";
 import VibeFontPanel, { FontOverlayData } from "./VibeFontPanel";
+import VibeTransitionPanel from "./VibeTransitionPanel";
+import TextEditorBar from "./TextEditorBar";
 import { v4 as uuid } from "uuid";
 
 type SearchHit = { id: string; sourceClipId: string; score: number };
@@ -224,6 +226,13 @@ export default function Editor() {
   const [sourceTime, setSourceTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [activeFontOverlay, setActiveFontOverlay] = useState<FontOverlayData | null>(null);
+  const [showTextEditor, setShowTextEditor] = useState(false);
+  const [showTransitionPanel, setShowTransitionPanel] = useState(false);
+  const [hasHydrated, setHasHydrated] = useState(false);
+
+  useEffect(() => {
+    setHasHydrated(true);
+  }, []);
 
   const [timelineHeight, setTimelineHeight] = useState(320);
   const dragRef = useRef<{ isDragging: boolean; startY: number; startHeight: number }>({ isDragging: false, startY: 0, startHeight: 0 });
@@ -1110,6 +1119,8 @@ export default function Editor() {
     };
   }, []);
 
+  if (!hasHydrated) return <div className="h-screen bg-[#0b0c0f]" />;
+
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-[#0b0c0f] text-white">
       <header className="flex items-center justify-between border-b border-white/8 bg-[#111215] px-5 py-3">
@@ -1293,6 +1304,17 @@ export default function Editor() {
                     isProcessing={isEditProcessing}
                     lastExplanation={lastExplanation}
                   />
+                  <button
+                    onClick={() => setShowTransitionPanel(true)}
+                    className="flex w-full items-center gap-2.5 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2.5 text-xs text-sky-400 transition hover:bg-sky-500/10"
+                  >
+                    <div className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-400/20">
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                    </div>
+                    <div className="text-left font-medium">AI Vibe Transition</div>
+                  </button>
                   <AssetGenPanel onInsertImage={handleInsertImage} onAddFiles={handleAddFiles} />
                 </div>
               </div>
@@ -1328,9 +1350,19 @@ export default function Editor() {
             )}
 
             {dockTab === "inspector" && (
-              <div className="h-full min-w-0 overflow-y-auto overflow-x-hidden p-4">
+              <div className="h-full min-w-0 overflow-y-auto overflow-x-hidden p-4 space-y-4">
                 <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Selection</p>
+                  <div className="flex items-center justify-between mb-4">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-white/32">Selection</p>
+                    <button 
+                      onClick={() => setShowTextEditor(!showTextEditor)}
+                      className={`rounded-lg px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition ${
+                        showTextEditor ? "bg-sky-400 text-black" : "bg-white/10 text-white hover:bg-white/20"
+                      }`}
+                    >
+                      {showTextEditor ? "Close Editor" : "Add Custom Text"}
+                    </button>
+                  </div>
                   {selectedTimelineClip ? (
                     <div className="mt-4 space-y-3">
                       <div>
@@ -1401,11 +1433,56 @@ export default function Editor() {
                     </p>
                   )}
                 </div>
+
+                {showTextEditor && (
+                  <TextEditorBar 
+                    initialData={activeFontOverlay}
+                    onApply={(overlay) => {
+                      setActiveFontOverlay(overlay);
+                      setMonitorMode("program");
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>
         </aside>
       </div>
+
+      {showTransitionPanel && (
+        <div className="fixed bottom-24 left-8 z-[100] w-full max-w-sm pointer-events-none">
+          <div className="pointer-events-auto">
+            <VibeTransitionPanel
+              onCancel={() => setShowTransitionPanel(false)}
+              onTransitionGenerated={async (videoUri) => {
+                const clipId = uuid();
+                const actualDuration = await getVideoDuration(videoUri).catch(() => 2);
+                const file = new File([], "ai_transition.mp4", { type: "video/mp4" });
+                const clip: LibraryClip = {
+                  id: clipId,
+                  file,
+                  fileName: "AI Vibe Transition",
+                  objectUrl: videoUri,
+                  duration: actualDuration, 
+                  status: "ready",
+                  transcriptSegments: [],
+                  pauseRanges: [],
+                  embeddingsReady: false,
+                  waveform: Array.from({ length: 36 }, () => 0.5),
+                };
+                setLibraryClips((prev) => [...prev, clip]);
+                setShowTransitionPanel(false);
+                dispatch({
+                  type: "ADD_SOURCE_CLIP",
+                  sourceClipId: clipId,
+                  duration: clip.duration,
+                  label: "AI Transition",
+                });
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

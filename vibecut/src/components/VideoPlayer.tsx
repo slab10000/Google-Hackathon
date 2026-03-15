@@ -19,6 +19,7 @@ interface VideoPlayerProps {
     color: string;
     textShadow: string;
     cssFilter?: string;
+    fontSize?: number;
   } | null;
 }
 
@@ -80,14 +81,21 @@ export default function VideoPlayer({
         <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-2xl border border-white/6 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.1),_transparent_35%),linear-gradient(180deg,_#0b0d10,_#07080b)]">
           {videoUrl ? (
             <video
+              id="main-player-video"
               ref={videoRef}
               src={videoUrl}
               className="h-full w-full object-contain"
               onClick={onTogglePlay}
+              crossOrigin="anonymous"
             />
           ) : imageSrc ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={imageSrc} alt="Timeline still" className="h-full w-full object-contain" />
+            <img 
+              id="main-player-image"
+              src={imageSrc} 
+              alt="Timeline still" 
+              className="h-full w-full object-contain" 
+            />
           ) : (
             <div className="flex max-w-sm flex-col items-center text-center">
               <div className="mb-4 h-14 w-14 rounded-2xl border border-white/8 bg-white/[0.04]" />
@@ -119,7 +127,7 @@ export default function VideoPlayer({
                   color: fontOverlay.color,
                   textShadow: fontOverlay.textShadow,
                   filter: fontOverlay.cssFilter,
-                  fontSize: "4rem",
+                  fontSize: fontOverlay.fontSize ? `${fontOverlay.fontSize}px` : "4rem",
                   lineHeight: 1.1,
                 }}
               >

@@ -11,11 +11,14 @@ export async function getFFmpeg(): Promise<FFmpeg> {
   loadPromise = (async () => {
     const instance = new FFmpeg();
     try {
+      // Use unpkg CDN for ffmpeg core assets to avoid local serving issues with MIME types,
+      // cross-origin headers, and path resolution in complex Next.js builds.
+      const coreURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.js';
+      const wasmURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm';
+      
       await instance.load({
-        // Serve ffmpeg core assets from the app so the module worker can import
-        // them directly without the blob: URL resolution issue in Next/Turbopack.
-        coreURL: `${FFMPEG_BASE_PATH}/ffmpeg-core.js`,
-        wasmURL: `${FFMPEG_BASE_PATH}/ffmpeg-core.wasm`,
+        coreURL,
+        wasmURL,
       });
     } catch (err) {
       // Reset so it can be retried
@@ -52,4 +55,39 @@ export async function extractAudio(
   await ff.deleteFile("audio.mp3");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return new Blob([data as any], { type: "audio/mp3" });
+}
+export async function mergeVideos(
+  video1Data: Uint8Array,
+  video2Data: Uint8Array,
+  onProgress?: (progress: number) => void
+): Promise<Blob> {
+  const ff = await getFFmpeg();
+  if (onProgress) {
+    ff.on("progress", ({ progress }) => onProgress(progress));
+  }
+
+  await ff.writeFile("video1.mp4", video1Data);
+  await ff.writeFile("video2.mp4", video2Data);
+
+  // Create a concat list file
+  const concatContent = "file video1.mp4\nfile video2.mp4";
+  await ff.writeFile("list.txt", new TextEncoder().encode(concatContent));
+
+  await ff.exec([
+    "-f", "concat",
+    "-safe", "0",
+    "-i", "list.txt",
+    "-c", "copy",
+    "output.mp4"
+  ]);
+
+  const data = await ff.readFile("output.mp4");
+
+  await ff.deleteFile("video1.mp4");
+  await ff.deleteFile("video2.mp4");
+  await ff.deleteFile("list.txt");
+  await ff.deleteFile("output.mp4");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return new Blob([data as any], { type: "video/mp4" });
 }
