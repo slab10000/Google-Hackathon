@@ -1,6 +1,13 @@
 "use client";
 import { useState, useCallback } from "react";
+import { extractAudio } from "@/lib/ffmpeg";
 import { PauseRange, TranscriptSegment, TranscriptWord } from "@/types";
+
+const DIRECT_VIDEO_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+
+function buildAudioFileName(videoFileName: string) {
+  return videoFileName.replace(/\.[^.]+$/, "") + ".mp3";
+}
 
 export function useTranscript() {
   const [activeJobs, setActiveJobs] = useState(0);
@@ -11,17 +18,41 @@ export function useTranscript() {
     setError(null);
 
     try {
-      const res = await fetch("/api/transcribe", {
-        method: "POST",
-        headers: {
-          "Content-Type": file.type || "application/octet-stream",
-          "X-Video-Filename": encodeURIComponent(file.name),
-        },
-        body: file,
-      });
+      let res: Response;
+
+      try {
+        const audioBlob = await extractAudio(new Uint8Array(await file.arrayBuffer()));
+        res = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: {
+            "Content-Type": audioBlob.type || "audio/mpeg",
+            "X-Audio-Filename": encodeURIComponent(buildAudioFileName(file.name)),
+          },
+          body: audioBlob,
+        });
+      } catch (extractError) {
+        if (file.size > DIRECT_VIDEO_UPLOAD_LIMIT_BYTES) {
+          throw new Error(
+            "Browser audio extraction failed, and this clip is too large for the deployed fallback upload. Try a shorter clip or re-export with standard audio."
+          );
+        }
+
+        console.warn("Falling back to direct video upload for transcription", extractError);
+        res = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+            "X-Video-Filename": encodeURIComponent(file.name),
+          },
+          body: file,
+        });
+      }
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
+        if (res.status === 413) {
+          throw new Error("This upload is too large for the deployed transcription endpoint. Try a shorter clip.");
+        }
         throw new Error(data?.error || `Transcription failed: ${res.statusText}`);
       }
 

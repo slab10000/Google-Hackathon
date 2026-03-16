@@ -239,7 +239,23 @@ async function extractAudioFromVideoFile(videoFile: File) {
 
 async function getAudioPayload(req: Request) {
   const contentType = req.headers.get("content-type") || "";
+  const rawAudioFileName = req.headers.get("x-audio-filename");
   const rawVideoFileName = req.headers.get("x-video-filename");
+
+  if (rawAudioFileName) {
+    const buffer = Buffer.from(await req.arrayBuffer());
+
+    if (buffer.length === 0) {
+      throw new Error("No audio data provided");
+    }
+
+    return {
+      audioBase64: buffer.toString("base64"),
+      mimeType: contentType || "audio/mpeg",
+      audioPath: null,
+      cleanupPath: null,
+    };
+  }
 
   if (rawVideoFileName) {
     const buffer = await req.arrayBuffer();
