@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface CommandInputProps {
   onSubmit: (command: string) => void;
@@ -9,6 +9,15 @@ interface CommandInputProps {
 
 export default function CommandInput({ onSubmit, isProcessing, lastExplanation }: CommandInputProps) {
   const [value, setValue] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`;
+  }, [value]);
 
   const handleSubmit = () => {
     if (value.trim() && !isProcessing) {
@@ -19,20 +28,26 @@ export default function CommandInput({ onSubmit, isProcessing, lastExplanation }
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div className="flex min-w-0 flex-wrap gap-2">
-        <input
-          type="text"
+      <div className="flex min-w-0 flex-col gap-2">
+        <textarea
+          ref={textareaRef}
           placeholder='Try: "make this snappier", "remove the introduction", "cut filler words"...'
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
           disabled={isProcessing}
-          className="min-w-0 flex-1 basis-48 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder-white/25 focus:border-violet-500/50 focus:outline-none disabled:opacity-50"
+          rows={4}
+          className="min-h-28 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-white placeholder-white/25 focus:border-violet-500/50 focus:outline-none disabled:opacity-50"
         />
         <button
           onClick={handleSubmit}
           disabled={isProcessing || !value.trim()}
-          className="flex shrink-0 items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex self-end items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isProcessing ? (
             <>
@@ -49,6 +64,7 @@ export default function CommandInput({ onSubmit, isProcessing, lastExplanation }
           )}
         </button>
       </div>
+      <p className="px-1 text-[11px] text-white/32">Press Ctrl/Cmd + Enter to submit.</p>
       {lastExplanation && (
         <p className="text-xs text-violet-300/70 px-1">{lastExplanation}</p>
       )}
